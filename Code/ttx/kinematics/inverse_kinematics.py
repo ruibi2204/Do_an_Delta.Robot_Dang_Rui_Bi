@@ -1,6 +1,7 @@
 # ============================================================
 #  kinematics/inverse_kinematics.py — Động học ngược Robot Delta
 # ============================================================
+# pyrefly: ignore [missing-import]
 import numpy as np
 
 
@@ -43,20 +44,20 @@ def inverse_kinematics(Px: float, Py: float, Pz: float):
         Cyi = Pyi
         Czi = Pzi
 
-        # 2. Giải góc phụ theta_3i (Phương trình 2.8)
-        cos_theta3 = Cyi / b
-        if abs(cos_theta3) > 1.0:
+        # 2. Kiểm tra điều kiện vùng làm việc (Thay vì dùng lượng giác)
+        if abs(Cyi) > b:
             raise ValueError(f"Điểm ({Px},{Py},{Pz}) vượt vùng làm việc cơ khí (cánh {i+1})!")
 
-        theta3 = np.arccos(cos_theta3)
-        sin_theta3 = np.sin(theta3)
-
         # 3. Áp dụng phép thế Weierstrass — giải phương trình bậc 2 (Phương trình 2.11)
-        # RHS đúng theo vế phải phương trình (2.11)
-        RHS = Cxi ** 2 + Czi ** 2 + a ** 2 - (b ** 2) * (sin_theta3 ** 2)
+        # Tính RHS đã được tối giản triệt để hàm lượng giác
+        RHS = Cxi ** 2 + Cyi ** 2 + Czi ** 2 + a ** 2 - b ** 2
 
         # Sửa lại hệ số A, B, C chuẩn xác theo biến đổi toán học từ hình ảnh
         A_coeff = RHS + 2 * a * Cxi
+        
+        # Phòng hờ trường hợp A_coeff = 0 gây lỗi chia cho 0 (ZeroDivisionError)
+        if A_coeff == 0:
+            raise ValueError(f"Điểm kỳ dị toán học tại cánh {i + 1}!")
         B_coeff = -4 * a * Czi
         C_coeff = RHS - 2 * a * Cxi
 
