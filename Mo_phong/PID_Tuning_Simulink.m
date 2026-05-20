@@ -25,7 +25,7 @@ u = 3.8;
 % 3. Khuyến nghị: Xuất thêm khối 'To Workspace' với tên 'y_ref' (Tín hiệu đặt) 
 %    và 'y_out' (Tín hiệu đáp ứng) để chương trình tự động vẽ đồ thị.
 % =========================================================================
-simulink_model = 'Ten_File_Simulink_Cua_Ban'; 
+simulink_model = 'Delta_Robot_PID'; 
 
 %% 2. Giao diện điều khiển
 disp('=====================================================');
