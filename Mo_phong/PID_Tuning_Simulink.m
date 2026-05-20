@@ -22,6 +22,8 @@ u = 3.8;
 % 1. Các khối PID Controller (hoặc Gain) phải nhận biến là Kp, Ki, Kd
 % 2. Phải có khối 'To Workspace' xuất ra biến 'error_signal' (lưu dạng Array hoặc Timeseries)
 %    chứa giá trị sai số e(t) = Tín hiệu đặt - Tín hiệu thực tế.
+% 3. Khuyến nghị: Xuất thêm khối 'To Workspace' với tên 'y_ref' (Tín hiệu đặt) 
+%    và 'y_out' (Tín hiệu đáp ứng) để chương trình tự động vẽ đồ thị.
 % =========================================================================
 simulink_model = 'Ten_File_Simulink_Cua_Ban'; 
 
@@ -46,8 +48,9 @@ if choice == 1
     
     disp('Đang tiến hành chạy mô phỏng Simulink...');
     try
-        sim(simulink_model);
-        disp('Mô phỏng hoàn tất! Xem đồ thị trên Scope trong Simulink.');
+        out = sim(simulink_model, 'ReturnWorkspaceOutputs', 'on');
+        disp('Mô phỏng hoàn tất! Đang tạo đồ thị trực quan...');
+        plot_results(out);
     catch ME
         disp('LỖI: Không thể chạy file Simulink. Hãy chắc chắn đúng tên file và file đang ở thư mục hiện tại.');
         disp(ME.message);
@@ -78,8 +81,9 @@ elseif choice == 2
         assignin('base', 'Kp', PID_opt(1));
         assignin('base', 'Ki', PID_opt(2));
         assignin('base', 'Kd', PID_opt(3));
-        sim(simulink_model);
+        out = sim(simulink_model, 'ReturnWorkspaceOutputs', 'on');
         disp('Đã lưu Kp, Ki, Kd tối ưu vào Workspace và chạy lại mô phỏng.');
+        plot_results(out);
     catch ME
         disp('LỖI trong quá trình tối ưu hóa. Hãy kiểm tra lại file Simulink.');
         disp(ME.message);
@@ -126,5 +130,54 @@ function J = cost_function(PID, model)
     catch
         % Phạt nếu hệ thống mất ổn định / không chạy được
         J = 1e6;
+    end
+end
+
+%% =========================================================================
+% HÀM VẼ ĐỒ THỊ TRỰC QUAN
+% =========================================================================
+function plot_results(out)
+    figure('Name', 'Ket qua mo phong PID', 'Color', [1 1 1], 'NumberTitle', 'off');
+    
+    has_ref_out = isfield(out, 'y_ref') && isfield(out, 'y_out');
+    has_err = isfield(out, 'error_signal');
+    
+    if has_ref_out && has_err
+        subplot(2,1,1);
+    end
+    
+    % Vẽ Tín hiệu đặt và Tín hiệu thực tế
+    if has_ref_out
+        if ~has_err; subplot(1,1,1); end
+        hold on; grid on;
+        
+        if isa(out.y_ref, 'timeseries')
+            plot(out.y_ref.Time, out.y_ref.Data, 'b--', 'LineWidth', 1.5);
+            plot(out.y_out.Time, out.y_out.Data, 'r-', 'LineWidth', 1.5);
+        else
+            plot(out.y_ref(:,1), out.y_ref(:,2), 'b--', 'LineWidth', 1.5);
+            plot(out.y_out(:,1), out.y_out(:,2), 'r-', 'LineWidth', 1.5);
+        end
+        title('Tín hiệu Đặt (Setpoint) và Đáp ứng (Feedback)', 'FontSize', 12);
+        xlabel('Thời gian (s)'); ylabel('Biên độ');
+        legend('Tín hiệu đặt (y_{ref})', 'Tín hiệu thực tế (y_{out})', 'Location', 'best');
+    end
+    
+    % Vẽ Tín hiệu sai số
+    if has_err
+        if has_ref_out; subplot(2,1,2); end
+        hold on; grid on;
+        
+        if isa(out.error_signal, 'timeseries')
+            plot(out.error_signal.Time, out.error_signal.Data, 'k-', 'LineWidth', 1.2);
+        else
+            plot(out.error_signal(:,1), out.error_signal(:,2), 'k-', 'LineWidth', 1.2);
+        end
+        title('Sai số e(t)', 'FontSize', 12);
+        xlabel('Thời gian (s)'); ylabel('Biên độ sai số');
+    end
+    
+    if ~has_ref_out && ~has_err
+        disp('LƯU Ý: Không tìm thấy biến y_ref, y_out, error_signal trong Workspace để vẽ đồ thị.');
     end
 end
