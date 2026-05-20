@@ -109,26 +109,28 @@ function J = cost_function(PID, model)
         % Chạy mô phỏng, bắt kết quả trả về
         out = sim(model, 'ReturnWorkspaceOutputs', 'on');
         
-        % Tìm biến error_signal từ output
-        if isfield(out, 'error_signal')
-            % Nếu xuất ra dưới dạng TimeSeries
-            if isa(out.error_signal, 'timeseries')
-                e = out.error_signal.Data;
-                t = out.error_signal.Time;
-            else
-                % Nếu xuất ra dạng mảng
-                e = out.error_signal(:, 2); % Giả sử cột 2 là Data
-                t = out.error_signal(:, 1); % Cột 1 là Time
-            end
-            
-            % Tính chuẩn ITAE (Integral of Time multiplied by Absolute Error)
-            J = trapz(t, t .* abs(e(:)));
-        else
-            % Phạt nếu không tìm thấy tín hiệu sai số
-            J = 1e6; 
+        % Lấy biến error_signal từ output (Hỗ trợ SimulationOutput object)
+        try
+            err_data = out.get('error_signal');
+        catch
+            err_data = out.error_signal; % Fallback cho struct
         end
+        
+        % Nếu xuất ra dưới dạng TimeSeries
+        if isa(err_data, 'timeseries')
+            e = err_data.Data;
+            t = err_data.Time;
+        else
+            % Nếu xuất ra dạng mảng
+            e = err_data(:, 2); % Giả sử cột 2 là Data
+            t = err_data(:, 1); % Cột 1 là Time
+        end
+        
+        % Tính chuẩn ITAE (Integral of Time multiplied by Absolute Error)
+        J = trapz(t, t .* abs(e(:)));
+        
     catch
-        % Phạt nếu hệ thống mất ổn định / không chạy được
+        % Phạt nếu hệ thống mất ổn định / không tìm thấy biến
         J = 1e6;
     end
 end
@@ -137,10 +139,20 @@ end
 % HÀM VẼ ĐỒ THỊ TRỰC QUAN
 % =========================================================================
 function plot_results(out)
-    figure('Name', 'Ket qua mo phong PID', 'Color', [1 1 1], 'NumberTitle', 'off');
+    % Lấy dữ liệu từ out (Hỗ trợ SimulationOutput object)
+    try; y_ref = out.get('y_ref'); catch; try; y_ref = out.y_ref; catch; y_ref = []; end; end
+    try; y_out = out.get('y_out'); catch; try; y_out = out.y_out; catch; y_out = []; end; end
+    try; err_data = out.get('error_signal'); catch; try; err_data = out.error_signal; catch; err_data = []; end; end
     
-    has_ref_out = isfield(out, 'y_ref') && isfield(out, 'y_out');
-    has_err = isfield(out, 'error_signal');
+    has_ref_out = ~isempty(y_ref) && ~isempty(y_out);
+    has_err = ~isempty(err_data);
+
+    if ~has_ref_out && ~has_err
+        disp('LƯU Ý: Không tìm thấy biến y_ref, y_out, error_signal từ output để vẽ đồ thị.');
+        return;
+    end
+
+    figure('Name', 'Ket qua mo phong PID', 'Color', [1 1 1], 'NumberTitle', 'off');
     
     if has_ref_out && has_err
         subplot(2,1,1);
@@ -151,12 +163,12 @@ function plot_results(out)
         if ~has_err; subplot(1,1,1); end
         hold on; grid on;
         
-        if isa(out.y_ref, 'timeseries')
-            plot(out.y_ref.Time, out.y_ref.Data, 'b--', 'LineWidth', 1.5);
-            plot(out.y_out.Time, out.y_out.Data, 'r-', 'LineWidth', 1.5);
+        if isa(y_ref, 'timeseries')
+            plot(y_ref.Time, y_ref.Data, 'b--', 'LineWidth', 1.5);
+            plot(y_out.Time, y_out.Data, 'r-', 'LineWidth', 1.5);
         else
-            plot(out.y_ref(:,1), out.y_ref(:,2), 'b--', 'LineWidth', 1.5);
-            plot(out.y_out(:,1), out.y_out(:,2), 'r-', 'LineWidth', 1.5);
+            plot(y_ref(:,1), y_ref(:,2), 'b--', 'LineWidth', 1.5);
+            plot(y_out(:,1), y_out(:,2), 'r-', 'LineWidth', 1.5);
         end
         title('Tín hiệu Đặt (Setpoint) và Đáp ứng (Feedback)', 'FontSize', 12);
         xlabel('Thời gian (s)'); ylabel('Biên độ');
@@ -168,16 +180,12 @@ function plot_results(out)
         if has_ref_out; subplot(2,1,2); end
         hold on; grid on;
         
-        if isa(out.error_signal, 'timeseries')
-            plot(out.error_signal.Time, out.error_signal.Data, 'k-', 'LineWidth', 1.2);
+        if isa(err_data, 'timeseries')
+            plot(err_data.Time, err_data.Data, 'k-', 'LineWidth', 1.2);
         else
-            plot(out.error_signal(:,1), out.error_signal(:,2), 'k-', 'LineWidth', 1.2);
+            plot(err_data(:,1), err_data(:,2), 'k-', 'LineWidth', 1.2);
         end
         title('Sai số e(t)', 'FontSize', 12);
         xlabel('Thời gian (s)'); ylabel('Biên độ sai số');
-    end
-    
-    if ~has_ref_out && ~has_err
-        disp('LƯU Ý: Không tìm thấy biến y_ref, y_out, error_signal trong Workspace để vẽ đồ thị.');
     end
 end
