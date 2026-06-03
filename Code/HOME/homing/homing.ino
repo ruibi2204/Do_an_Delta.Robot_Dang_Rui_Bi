@@ -7,29 +7,29 @@ AccelStepper stepB(AccelStepper::DRIVER, PA2, PA3);
 AccelStepper stepC(AccelStepper::DRIVER, PA4, PA5);
 
 // ================== LIMIT SWITCH (NC) ==================
-#define LIMIT_A PA6
-#define LIMIT_B PB0
-#define LIMIT_C PA7
+const uint8_t LIMIT_A = PA6;
+const uint8_t LIMIT_B = PB0;
+const uint8_t LIMIT_C = PA7;
 
 bool homeDone = false;
 
 // ================== HOMING ==================
 void doHoming()
 {
-    const float HOMING_SPEED = -2000;   // CHẬM – CHẮC
+    const float HOMING_SPEED = -2000.0f;   // CHẬM – CHẮC
+    const long HOMING_BACKOFF = 100;
 
     while ( digitalRead(LIMIT_A) == HIGH ||
             digitalRead(LIMIT_B) == HIGH ||
             digitalRead(LIMIT_C) == HIGH )
     {
-        if (digitalRead(LIMIT_A) == HIGH) stepA.setSpeed(HOMING_SPEED);
-        else stepA.setSpeed(0);
+        bool moveA = digitalRead(LIMIT_A) == HIGH;
+        bool moveB = digitalRead(LIMIT_B) == HIGH;
+        bool moveC = digitalRead(LIMIT_C) == HIGH;
 
-        if (digitalRead(LIMIT_B) == HIGH) stepB.setSpeed(HOMING_SPEED);
-        else stepB.setSpeed(0);
-
-        if (digitalRead(LIMIT_C) == HIGH) stepC.setSpeed(HOMING_SPEED);
-        else stepC.setSpeed(0);
+        stepA.setSpeed(moveA ? HOMING_SPEED : 0);
+        stepB.setSpeed(moveB ? HOMING_SPEED : 0);
+        stepC.setSpeed(moveC ? HOMING_SPEED : 0);
 
         stepA.runSpeed();
         stepB.runSpeed();
@@ -39,6 +39,10 @@ void doHoming()
     stepA.setCurrentPosition(0);
     stepB.setCurrentPosition(0);
     stepC.setCurrentPosition(0);
+
+    stepA.moveTo(HOMING_BACKOFF);
+    stepB.moveTo(HOMING_BACKOFF);
+    stepC.moveTo(HOMING_BACKOFF);
 
     while (stepA.distanceToGo() || stepB.distanceToGo() || stepC.distanceToGo())
     {
