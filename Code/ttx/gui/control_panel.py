@@ -3,12 +3,15 @@
 # ============================================================
 import sys
 import logging
+# pyrefly: ignore [missing-import]
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QDoubleSpinBox, QPushButton, QComboBox,
     QGroupBox, QStatusBar, QTextEdit, QSplitter
 )
+# pyrefly: ignore [missing-import]
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, pyqtSlot
+# pyrefly: ignore [missing-import]
 from PyQt5.QtGui import QFont, QColor, QPalette
 
 from config.settings import (
@@ -311,6 +314,7 @@ class ControlPanel(QMainWindow):
     def _on_stm32_ready(self):
         """Callback được gọi khi STM32 gửi 'READY' sau khi homing xong."""
         # Gọi từ thread phụ → dùng QTimer để cập nhật UI an toàn
+        # pyrefly: ignore [missing-import]
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, self._handle_ready)
 

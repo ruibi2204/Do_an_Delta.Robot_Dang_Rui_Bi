@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import logging
+# pyrefly: ignore [missing-import]
 from PyQt5.QtWidgets import QApplication
 from gui.control_panel import ControlPanel
 
