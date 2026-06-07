@@ -168,7 +168,7 @@ class ControlPanel(QMainWindow):
         self.btn_send.setEnabled(False)
         self.btn_send.clicked.connect(self._send_command)
 
-        self.btn_home = QPushButton("🏠  Home (0, 0, 210)")
+        self.btn_home = QPushButton("🏠  Home (0, 0, 220)")
         self.btn_home.setFixedHeight(36)
         self.btn_home.clicked.connect(self._go_home)
 

@@ -1,5 +1,5 @@
-const int pul = PA2; 
-const int dir = PA3;
+const int pul = PA0; 
+const int dir = PA1;
 
 void setup() {
   pinMode(pul, OUTPUT);

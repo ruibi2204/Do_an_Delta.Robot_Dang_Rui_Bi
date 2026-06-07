@@ -26,7 +26,7 @@ float target_theta3 = 0.00;
 // ================== HOMING (Code của bạn) ==================
 void doHoming()
 {
-    const float HOMING_SPEED = -2000;   // CHẬM – CHẮC
+    const float HOMING_SPEED = -1000;   // CHẬM – CHẮC
 
     while ( digitalRead(LIMIT_A) == HIGH ||
             digitalRead(LIMIT_B) == HIGH ||
@@ -105,9 +105,9 @@ void xuly_Uart() {
                 if(strtokIndx != NULL) target_theta3 = atof(strtokIndx);
 
                 // Chuyển đổi từ Góc (độ) sang số Bước (Steps) tương ứng và nạp mục tiêu mới
-                stepA.moveTo((long)(target_theta1 * GOC_TO_STEP));
-                stepB.moveTo((long)(target_theta2 * GOC_TO_STEP));
-                stepC.moveTo((long)(target_theta3 * GOC_TO_STEP));
+                stepA.moveTo((long)(target_theta3 * GOC_TO_STEP));
+                stepB.moveTo((long)(target_theta1 * GOC_TO_STEP));
+                stepC.moveTo((long)(target_theta2 * GOC_TO_STEP));
             }
         }
         else if (rc == startMarker) {
@@ -126,14 +126,14 @@ void setup()
     pinMode(LIMIT_B, INPUT_PULLUP);
     pinMode(LIMIT_C, INPUT_PULLUP);
 
-    stepA.setMaxSpeed(5000);
-    stepA.setAcceleration(2000); 
+    stepA.setMaxSpeed(1000);
+    stepA.setAcceleration(1000); 
 
-    stepB.setMaxSpeed(5000);
-    stepB.setAcceleration(2000);
+    stepB.setMaxSpeed(1000);
+    stepB.setAcceleration(1000);
 
-    stepC.setMaxSpeed(5000);
-    stepC.setAcceleration(2000);
+    stepC.setMaxSpeed(1000);
+    stepC.setAcceleration(1000);
 
     // Chạy chu trình Set Home trước
     doHoming();

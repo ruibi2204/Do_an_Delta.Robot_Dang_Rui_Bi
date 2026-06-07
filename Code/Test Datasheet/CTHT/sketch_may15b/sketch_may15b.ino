@@ -1,5 +1,5 @@
 // Định nghĩa chân
-const int limitSwitch = PB0; 
+const int limitSwitch = PA6; 
 
 void setup() {
   // Khởi tạo Serial1 ở baudrate 9600
