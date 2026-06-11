@@ -3,7 +3,7 @@
 # ============================================================
 
 # --- UART ---
-UART_PORT     = "COM4"       # Thay đổi theo cổng thực tế (Linux: /dev/ttyUSB0)
+UART_PORT     = "COM3"       # Thay đổi theo cổng thực tế (Linux: /dev/ttyUSB0)
 UART_BAUDRATE = 115200
 UART_TIMEOUT  = 1            # giây
 

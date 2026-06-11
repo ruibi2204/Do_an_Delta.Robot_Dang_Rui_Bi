@@ -161,7 +161,7 @@ class ControlPanel(QMainWindow):
 
         self.spin_x = LabeledSpinBox("X", X_MIN, X_MAX, 0.0)
         self.spin_y = LabeledSpinBox("Y", Y_MIN, Y_MAX, 0.0)
-        self.spin_z = LabeledSpinBox("Z", Z_MIN, Z_MAX, 210.0)
+        self.spin_z = LabeledSpinBox("Z", Z_MIN, Z_MAX, 220.0)
 
         self.btn_send = QPushButton("▶  Gửi lệnh")
         self.btn_send.setFixedHeight(40)
