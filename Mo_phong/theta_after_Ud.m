@@ -10,7 +10,7 @@ R = 100;    % Bán kính đế cố định (mm)
 r = 40;     % Bán kính đế di động (mm)
 wb = R - r; % Khoảng cách hiệu dụng
 
-u = 3.8;    % Tỉ số truyền của bộ truyền đai (u = 3.8)
+u = 3.2;    % Tỉ số truyền của bộ truyền đai 
 
 %% 2. Tạo quỹ đạo chuyển động cho Bàn kẹp (End-effector)
 % Cho robot chạy một đường tròn nằm ngang ở độ sâu Z = -250mm
@@ -64,7 +64,7 @@ hold on; grid on;
 plot(Th1_motor_deg, 'r--', 'LineWidth', 2.5);
 plot(Th2_motor_deg, 'g--', 'LineWidth', 2.5);
 plot(Th3_motor_deg, 'b--', 'LineWidth', 2.5);
-title(['Theta DONG CO (Qua bo truyen dai u = ' num2cell(u) ')']);
+title(['Theta DONG CO (Qua bo truyen dai) ']);
 xlabel('Diem tren quy dao (Thoi gian)');
 ylabel('Goc (Do)');
 legend('Motor 1', 'Motor 2', 'Motor 3', 'Location', 'Best');
