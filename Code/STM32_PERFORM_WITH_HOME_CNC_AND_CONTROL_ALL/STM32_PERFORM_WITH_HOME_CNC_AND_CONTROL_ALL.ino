@@ -17,17 +17,17 @@
 #define HOME_BTN  PB1
 
 // ─── THAM SỐ CHUYỂN ĐỘNG ────────────────────────────────────
-#define HOMING_SPEED_FAST   1500
-#define HOMING_SPEED_SLOW   500
+#define HOMING_SPEED_FAST   800
+#define HOMING_SPEED_SLOW   300
 #define HOMING_ACCEL        800
-#define RUN_SPEED           8000
-#define RUN_ACCEL           2000
-#define BACKOFF_STEPS       1000
+#define RUN_SPEED           2000
+#define RUN_ACCEL           1000
+#define BACKOFF_STEPS       500
 
 // ─── HỆ SỐ CHUYỂN ĐỔI ───────────────────────────────────────
 // Lưu ý: Đảm bảo GOC_TO_STEP này đã bao gồm cả Tỉ số truyền đai (3.8) 
 // nếu phía Python không nhân, hoặc ngược lại.
-const float GOC_TO_STEP = 6400.0 / 360.0;
+const float GOC_TO_STEP = 3200.0 / 360.0;
 
 // ─── BIẾN TRẠNG THÁI ────────────────────────────────────────
 float target_theta1 = 0.0;
@@ -36,8 +36,8 @@ float target_theta3 = 0.0;
 bool homeDone = false;
 
 // ─── DEBOUNCE KHÔNG CHẶN (millis) ───────────────────────────
-#define DEBOUNCE_BTN_MS   30  
-#define DEBOUNCE_SW_MS     8  
+#define DEBOUNCE_BTN_MS   50  
+#define DEBOUNCE_SW_MS    10  
 
 static uint32_t sw1_last = 0, sw2_last = 0, sw3_last = 0;
 static bool sw1_state = HIGH, sw2_state = HIGH, sw3_state = HIGH;
@@ -106,32 +106,39 @@ void loop() {
 //  HOMING 2 PHA
 // ============================================================
 void doHoming() {
+  // === PHA 1: DÒ TÌM NHANH ===
   Serial.println("[PHA 1] Tìm home nhanh...");
   setMaxSpeed3(HOMING_SPEED_FAST);
-  setAccel3(HOMING_ACCEL);
-  homingPhase(-HOMING_SPEED_FAST, 25); 
+  // Chạy hàm homingPhase (đã bỏ drainMs theo hướng dẫn trước)
+  homingPhase(-HOMING_SPEED_FAST, 50); 
 
-  Serial.println("[PHA 1] Lùi backoff...");
-  moveAllTo(BACKOFF_STEPS);
-
-  Serial.println("[PHA 2] Tìm home chậm (chính xác)...");
-  setMaxSpeed3(HOMING_SPEED_SLOW);
-  setAccel3(HOMING_ACCEL);
-  homingPhase(-HOMING_SPEED_SLOW, 40); 
-
+  // === THIẾT LẬP HOME TẠM THỜI ĐỂ LÙI CỐ ĐỊNH ===
+  // Ngay khi vừa chạm switch, ép tọa độ tại switch này bằng 0
   motor1.setCurrentPosition(0);
   motor2.setCurrentPosition(0);
   motor3.setCurrentPosition(0);
-  Serial.println("[HOMING] HOME = 0 chính xác.");
+
+  // === LÙI BACKOFF CỐ ĐỊNH ===
+  Serial.println("[PHA 1] Lùi backoff cố định 500 bước...");
+  // Bây giờ di chuyển tới 500 nghĩa là chắc chắn lùi ra đúng 500 bước từ switch
+  moveAllTo(BACKOFF_STEPS); 
+
+  // === PHA 2: DÒ TÌM CHẬM CHÍNH XÁC ===
+  Serial.println("[PHA 2] Tìm home chậm (chính xác)...");
+  setMaxSpeed3(HOMING_SPEED_SLOW);
+  homingPhase(-HOMING_SPEED_SLOW, 50); 
+
+  // === THIẾT LẬP TỌA ĐỘ HOME THẬT ===
+  motor1.setCurrentPosition(0);
+  motor2.setCurrentPosition(0);
+  motor3.setCurrentPosition(0);
+  Serial.println("[HOMING] Đã xác định HOME = 0 chuẩn xác tuyệt đối.");
 
   setRunConfig();
   homeDone = true;
   
-  // Gửi tín hiệu phản hồi để Python biết MCU đã sẵn sàng
   Serial1.println("READY"); 
-  Serial.println("[HOMING] Hoàn tất! Sẵn sàng nhận lệnh UART.");
 }
-
 // ============================================================
 //  HOMING PHASE
 // ============================================================
@@ -289,8 +296,8 @@ void xuly_Uart() {
       if (p) target_theta3 = atof(p + 3);
       
       // Điều khiển động cơ dịch chuyển tới vị trí đích
-      motor1.moveTo((long)(target_theta1 * GOC_TO_STEP));
-      motor2.moveTo((long)(target_theta2 * GOC_TO_STEP));
+      motor1.moveTo((long)(target_theta2 * GOC_TO_STEP));
+      motor2.moveTo((long)(target_theta1 * GOC_TO_STEP));
       motor3.moveTo((long)(target_theta3 * GOC_TO_STEP));
       
       // Debug thông tin ra cổng máy tính

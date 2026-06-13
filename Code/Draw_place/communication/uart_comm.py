@@ -28,7 +28,7 @@ except ImportError:
 
 
 # ─── Hằng số ──────────────────────────────────────────────────────────────────
-GEAR_RATIO   = 3.2      # Tỉ số truyền đai: góc_stepper = theta_IK × 3.8
+GEAR_RATIO   = 3.0      # Tỉ số truyền đai: góc_stepper = theta_IK × 3.8
 DEFAULT_BAUD = 115200
 SEND_TIMEOUT = 2.0      # giây — timeout ghi serial
 
@@ -46,7 +46,7 @@ class UARTComm:
 
     def __init__(
         self,
-        port: str = "COM4",
+        port: str = "COM5",
         baud: int = DEFAULT_BAUD,
         gear_ratio: float = GEAR_RATIO,
         log_callback: Optional[Callable[[str], None]] = None,

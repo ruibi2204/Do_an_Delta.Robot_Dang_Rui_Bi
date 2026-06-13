@@ -252,7 +252,7 @@ class DeltaRobotGUI:
                  font=("Courier", 9), width=6).pack(side="left")
         self._baud_var = tk.StringVar(value="115200")
         ttk.Combobox(baud_row, textvariable=self._baud_var,
-                     values=["9600", "57600", "115200", "250000"],
+                     values=["9600", "115200"],
                      width=14, font=("Courier", 9)).pack(side="left", padx=4)
 
         self._connect_btn = tk.Button(inner, text="⚡ KẾT NỐI",
@@ -286,9 +286,9 @@ class DeltaRobotGUI:
         self._kd_var = tk.DoubleVar(value=0.02)
 
         for label, var, from_, to, res in [
-            ("Kp", self._kp_var, 0.0, 5.0, 0.05),
-            ("Ki", self._ki_var, 0.0, 2.0, 0.01),
-            ("Kd", self._kd_var, 0.0, 1.0, 0.005),
+            ("Kp", self._kp_var, -1000.0, 1000.0, 0.5),
+            ("Ki", self._ki_var, -1000.0, 1000.0, 0.5),
+            ("Kd", self._kd_var, -1000.0, 1000.0, 0.5),
         ]:
             row = tk.Frame(inner, bg=C["bg2"])
             row.pack(fill="x", **pad)
