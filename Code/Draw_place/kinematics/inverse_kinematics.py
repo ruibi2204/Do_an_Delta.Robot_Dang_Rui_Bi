@@ -20,10 +20,10 @@ def inverse_kinematics(Px: float, Py: float, Pz: float):
         ValueError nếu điểm nằm ngoài vùng làm việc.
     """
 
-    R = 100.0   # OA_i   — Bán kính mâm tĩnh (mm)
+    R = 95.0   # OA_i   — Bán kính mâm tĩnh (mm)
     a = 130.0   # A_iB_i — Chiều dài cánh tay trên (mm)
     b = 298.0   # B_iC_i — Chiều dài cánh tay dưới (mm)
-    r = 35.30   # C_iP_i — Bán kính mâm động (mm)
+    r = 40   # C_iP_i — Bán kính mâm động (mm)
 
     # Góc phi_i của 3 cánh tay (0°, 120°, 240°)
     phi = np.radians([0.0, 120.0, 240.0])

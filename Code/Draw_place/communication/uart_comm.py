@@ -30,7 +30,7 @@ except ImportError:
 # ─── Hằng số ──────────────────────────────────────────────────────────────────
 GEAR_RATIO   = 3.0      # Tỉ số truyền đai: góc_stepper = theta_IK × 3.8
 DEFAULT_BAUD = 115200
-SEND_TIMEOUT = 2.0      # giây — timeout ghi serial
+SEND_TIMEOUT = 1      # giây — timeout ghi serial
 
 
 class UARTComm:

@@ -20,8 +20,8 @@
 #define HOMING_SPEED_FAST   800
 #define HOMING_SPEED_SLOW   300
 #define HOMING_ACCEL        800
-#define RUN_SPEED           2000
-#define RUN_ACCEL           1000
+#define RUN_SPEED           1000
+#define RUN_ACCEL           800
 #define BACKOFF_STEPS       500
 
 // ─── HỆ SỐ CHUYỂN ĐỔI ───────────────────────────────────────
