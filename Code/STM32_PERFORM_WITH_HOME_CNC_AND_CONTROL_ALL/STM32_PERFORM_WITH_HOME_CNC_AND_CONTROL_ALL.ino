@@ -12,8 +12,8 @@
 #define HOMING_SPEED_FAST   500
 #define HOMING_SPEED_SLOW   300
 #define HOMING_ACCEL        100
-#define RUN_SPEED           800
-#define RUN_ACCEL           400
+#define RUN_SPEED           8000
+#define RUN_ACCEL           6000
 #define BACKOFF_STEPS       800
 
 const float GOC_TO_STEP = 6400.0 / 360.0;

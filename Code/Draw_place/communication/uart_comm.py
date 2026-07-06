@@ -8,7 +8,7 @@ try:
 except ImportError:
     SERIAL_AVAILABLE = False
 
-GEAR_RATIO   = 3.2
+GEAR_RATIO   = 3.0
 DEFAULT_BAUD = 115200
 SEND_TIMEOUT = 1
 class UARTComm:
