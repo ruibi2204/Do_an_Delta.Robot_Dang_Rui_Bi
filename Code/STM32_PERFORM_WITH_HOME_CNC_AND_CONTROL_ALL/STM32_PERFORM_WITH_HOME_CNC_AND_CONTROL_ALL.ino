@@ -1,20 +1,20 @@
 #include <AccelStepper.h>
-#define STEP1     PA0
-#define DIR1      PA1
-#define STEP2     PA2
-#define DIR2      PA3
-#define STEP3     PA4
-#define DIR3      PA5
-#define SW1       PA6
-#define SW2       PB0
-#define SW3       PA7
-#define HOME_BTN  PB1
-#define HOMING_SPEED_FAST   500
-#define HOMING_SPEED_SLOW   300
-#define HOMING_ACCEL        100
-#define RUN_SPEED           8000
-#define RUN_ACCEL           6000
-#define BACKOFF_STEPS       800
+#define STEP1 PA0
+#define DIR1 PA1
+#define STEP2 PA2
+#define DIR2 PA3
+#define STEP3 PA4
+#define DIR3 PA5
+#define SW1 PA6
+#define SW2 PB0
+#define SW3 PA7
+#define HOME_BTN PB1
+#define HOMING_SPEED_FAST 1000
+#define HOMING_SPEED_SLOW 500
+#define HOMING_ACCEL 200
+#define RUN_SPEED 1000
+#define RUN_ACCEL 600
+#define BACKOFF_STEPS 800
 
 const float GOC_TO_STEP = 6400.0 / 360.0;
 float target_theta1 = 0.0;
@@ -22,8 +22,8 @@ float target_theta2 = 0.0;
 float target_theta3 = 0.0;
 bool homeDone = false;
 
-#define DEBOUNCE_BTN_MS   50  
-#define DEBOUNCE_SW_MS    10  
+#define DEBOUNCE_BTN_MS 50
+#define DEBOUNCE_SW_MS 10
 
 static uint32_t sw1_last = 0, sw2_last = 0, sw3_last = 0;
 static bool sw1_state = HIGH, sw2_state = HIGH, sw3_state = HIGH;
@@ -45,7 +45,7 @@ bool readButton();
 void xuly_Uart();
 
 void setup() {
-  Serial.begin(115200); 
+  Serial.begin(115200);
   delay(100);
   Serial.println("=== DELTA ROBOT - 2-PHASE HOMING ===");
   Serial1.begin(115200);
@@ -56,8 +56,8 @@ void setup() {
   setMaxSpeed3(HOMING_SPEED_FAST);
   setAccel3(HOMING_ACCEL);
   Serial.println("Nhấn PB1 để bắt đầu homing...");
-  while (digitalRead(HOME_BTN) == HIGH) {  }
-  while (digitalRead(HOME_BTN) == LOW)  {  }
+  while (digitalRead(HOME_BTN) == HIGH) {}
+  while (digitalRead(HOME_BTN) == LOW) {}
   doHoming();
 }
 void loop() {
@@ -77,28 +77,24 @@ void loop() {
 void doHoming() {
   Serial.println("[PHA 1] Tìm home nhanh...");
   setMaxSpeed3(HOMING_SPEED_FAST);
-  homingPhase(-HOMING_SPEED_FAST, 50); 
+  homingPhase(-HOMING_SPEED_FAST, 50);
   motor1.setCurrentPosition(0);
   motor2.setCurrentPosition(0);
   motor3.setCurrentPosition(0);
   Serial.println("[PHA 1] Lùi backoff cố định 500 bước...");
-  moveAllTo(BACKOFF_STEPS); 
+  moveAllTo(BACKOFF_STEPS);
   Serial.println("[PHA 2] Tìm home chậm (chính xác)...");
   setMaxSpeed3(HOMING_SPEED_SLOW);
-  homingPhase(-HOMING_SPEED_SLOW, 50); 
+  homingPhase(-HOMING_SPEED_SLOW, 50);
   motor1.setCurrentPosition(0);
   motor2.setCurrentPosition(0);
   motor3.setCurrentPosition(0);
   Serial.println("[HOMING] Đã xác định HOME = 0 chuẩn xác tuyệt đối.");
-
   // ==== Hạ robot xuống 100 xung sau khi home xong ====
-  Serial.println("[HOMING] Hạ xuống 100 xung...");
-  moveAllTo(350);
   // =====================================================
-
   setRunConfig();
+  Serial1.println("READY");
   homeDone = true;
-  Serial1.println("READY"); 
 }
 void homingPhase(float speed, uint32_t drainMs) {
   bool homed1 = false, homed2 = false, homed3 = false;
@@ -130,7 +126,7 @@ void homingPhase(float speed, uint32_t drainMs) {
           motor1.runSpeed();
         }
       } else if (readSwitch(SW1, sw1_state, sw1_last, DEBOUNCE_SW_MS)) {
-        drain1 = millis(); 
+        drain1 = millis();
       } else {
         motor1.runSpeed();
       }
@@ -174,21 +170,21 @@ bool readSwitch(uint8_t pin, bool &state, uint32_t &lastTime, uint32_t dMs) {
     lastTime = millis();
   }
   if ((millis() - lastTime) >= dMs) {
-    return state; 
+    return state;
   }
   return false;
 }
 bool readButton() {
   static bool last_stable_state = HIGH;
   bool raw = digitalRead(HOME_BTN);
-  
+
   if (raw != btn_state) {
     btn_state = raw;
     btn_last = millis();
   }
-  
+
   if ((millis() - btn_last) >= DEBOUNCE_BTN_MS) {
-    if (last_stable_state == HIGH && btn_state == LOW) { 
+    if (last_stable_state == HIGH && btn_state == LOW) {
       last_stable_state = btn_state;
       return true;
     }
@@ -207,26 +203,29 @@ void xuly_Uart() {
         receivedChars[ndx++] = rc;
       }
     } else {
-      receivedChars[ndx] = '\0'; 
-      ndx = 0; 
+      receivedChars[ndx] = '\0';
+      ndx = 0;
       if (strcmp(receivedChars, "HOME") == 0) {
         Serial.println("[UART] Nhận lệnh HOME -> Tiến hành Re-homing...");
         homeDone = false;
         doHoming();
         return;
       }
-      char* p = strstr(receivedChars, "T1:");
+      char *p = strstr(receivedChars, "T1:");
       if (p) target_theta1 = atof(p + 3);
       p = strstr(receivedChars, "T2:");
       if (p) target_theta2 = atof(p + 3);
       p = strstr(receivedChars, "T3:");
       if (p) target_theta3 = atof(p + 3);
-      motor1.moveTo((long)(target_theta2 * GOC_TO_STEP));
+      motor1.moveTo((long)(target_theta3 * GOC_TO_STEP));
       motor2.moveTo((long)(target_theta1 * GOC_TO_STEP));
-      motor3.moveTo((long)(target_theta3 * GOC_TO_STEP));
-      Serial.print("[UART-RX] M1:"); Serial.print(target_theta1);
-      Serial.print(" | M2:"); Serial.print(target_theta2);
-      Serial.print(" | M3:"); Serial.println(target_theta3);
+      motor3.moveTo((long)(target_theta2 * GOC_TO_STEP));
+      Serial.print("[UART-RX] M1:");
+      Serial.print(target_theta1);
+      Serial.print(" | M2:");
+      Serial.print(target_theta2);
+      Serial.print(" | M3:");
+      Serial.println(target_theta3);
     }
   }
 }
@@ -234,20 +233,23 @@ void moveAllTo(long pos) {
   motor1.moveTo(pos);
   motor2.moveTo(pos);
   motor3.moveTo(pos);
-  while (motor1.distanceToGo() != 0 ||
-         motor2.distanceToGo() != 0 ||
-         motor3.distanceToGo() != 0) {
+  while (motor1.distanceToGo() != 0 || motor2.distanceToGo() != 0 || motor3.distanceToGo() != 0) {
     motor1.run();
     motor2.run();
     motor3.run();
   }
 }
 void setMaxSpeed3(float s) {
-  motor1.setMaxSpeed(s); motor2.setMaxSpeed(s); motor3.setMaxSpeed(s);
+  motor1.setMaxSpeed(s);
+  motor2.setMaxSpeed(s);
+  motor3.setMaxSpeed(s);
 }
 void setAccel3(float a) {
-  motor1.setAcceleration(a); motor2.setAcceleration(a); motor3.setAcceleration(a);
+  motor1.setAcceleration(a);
+  motor2.setAcceleration(a);
+  motor3.setAcceleration(a);
 }
 void setRunConfig() {
-  setMaxSpeed3(RUN_SPEED); setAccel3(RUN_ACCEL);
+  setMaxSpeed3(RUN_SPEED);
+  setAccel3(RUN_ACCEL);
 }
