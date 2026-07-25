@@ -1,6 +1,6 @@
 import numpy as np
 def inverse_kinematics(Px: float, Py: float, Pz: float):
-    R = 100.0
+    R = 122.0
     a = 130.0
     b = 298.0
     r = 40

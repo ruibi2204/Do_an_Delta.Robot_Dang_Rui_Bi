@@ -16,7 +16,7 @@ import numpy as np
 # Đây là các thông số dễ sai nhất trong thực tế (xem phân tích trước).
 # Nếu robot chạy lệch X,Y theo kiểu co giãn đều theo bán kính,
 # hãy hiệu chỉnh lại R và r trước tiên.
-R = 89
+R = 122
 r = 40.0
 a = 130.0
 b = 298.0

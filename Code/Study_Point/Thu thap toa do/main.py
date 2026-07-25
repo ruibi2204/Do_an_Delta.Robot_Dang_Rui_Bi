@@ -313,7 +313,6 @@ def run_webcam(camera_index, camera_matrix, dist_coeffs, board_w, board_h, squar
         if not ret:
             print("Khong doc duoc frame tu camera.")
             break
-
         undistorted_preview, _ = undistort_image(frame, camera_matrix, dist_coeffs)
 
         gray_preview = cv2.cvtColor(undistorted_preview, cv2.COLOR_BGR2GRAY)

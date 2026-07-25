@@ -382,11 +382,52 @@ class DeltaRobotGUI(QMainWindow):
             self.status_label.setStyleSheet("color: #d32f2f; font-weight: bold;")
             self.log(f"❌ Lỗi di chuyển: {e}")
 
+    def _move_home(self) -> bool:
+        """Ve HOME THAT SU: gui lenh 'HOME' cho STM32, roi CHO cho den khi
+        STM32 xac nhan da cham du 3 cong tac hanh trinh bang cach tra ve
+        dong 'READY' (xem ham doHoming()/xuly_Uart() ben firmware STM32).
+
+        KHONG con gui goc (0,0,0) nhu truoc nua, vi gia tri goc khong noi
+        len viec robot da thuc su cham cong tac hanh trinh hay chua.
+
+        Tra ve True neu STM32 xac nhan HOME DONE trong thoi gian cho phep,
+        False neu timeout / mat ket noi — luc do KHONG duoc coi la da home.
+        """
+        try:
+            if not self.uart_connected or self.comm is None:
+                self.log("⚠️ Chưa kết nối UART, giả lập về HOME")
+                time.sleep(0.5)
+                self.status_label.setText("✅ Đã về HOME (giả lập, chưa kết nối thật)")
+                self.status_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
+                return True
+
+            self.status_label.setText("⏳ Đang HOME — chờ chạm đủ 3 công tắc hành trình...")
+            self.status_label.setStyleSheet("color: #ed6c02; font-weight: bold;")
+            self.log("🏠 Gửi lệnh HOME cho STM32, chờ xác nhận READY...")
+
+            ok = self.comm.send_home_and_wait()
+
+            if ok:
+                self.status_label.setText("✅ HOME DONE (đã chạm đủ 3 công tắc hành trình)")
+                self.status_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
+                self.log("🏠 STM32 xác nhận HOME DONE (nhận được READY)")
+                return True
+            else:
+                self.status_label.setText("❌ HOME thất bại / timeout — chưa chạm đủ 3 công tắc")
+                self.status_label.setStyleSheet("color: #d32f2f; font-weight: bold;")
+                self.log("❌ Không nhận được xác nhận HOME (READY) từ STM32")
+                return False
+        except Exception as e:
+            self.status_label.setText(f"❌ Lỗi: {e}")
+            self.status_label.setStyleSheet("color: #d32f2f; font-weight: bold;")
+            self.log(f"❌ Lỗi gửi HOME: {e}")
+            return False
+
     def move_home(self):
         self.entry_x.setText("0")
         self.entry_y.setText("0")
-        self.entry_z.setText("300")
-        self.move_to_coord()
+        self.entry_z.setText("0")
+        threading.Thread(target=self._move_home, daemon=True).start()
 
     def move_pick(self):
         try:
@@ -476,7 +517,7 @@ class DeltaRobotGUI(QMainWindow):
                     idx = int(row.get('corner_index', 0))
                     x_mm = float(row.get('x_mm', 0))
                     y_mm = float(row.get('y_mm', 0))
-                    z_mm = float(row.get('z_mm', 326.0)) if 'z_mm' in row else 326.0
+                    z_mm = float(row.get('z_mm', 338.0)) if 'z_mm' in row else 338.0
                     self.csv_data_raw.append((idx, x_mm, y_mm, z_mm))
             self.log(f"📂 Đã load {len(self.csv_data_raw)} điểm từ CSV (tọa độ gốc, chưa cộng offset)")
             self.apply_offset()
@@ -539,24 +580,37 @@ class DeltaRobotGUI(QMainWindow):
         threading.Thread(target=self._auto_loop, daemon=True).start()
 
     def _auto_loop(self):
+        HOME_INTERVAL = 15  # cu sau 15 diem thi ve HOME 1 lan
         try:
             self.log("🏁 Bắt đầu chuỗi tự động")
-            self._move(*HOME_POS)
-            time.sleep(WAIT_HOME)
+            if not self._move_home():
+                self.log("⛔ HOME đầu chuỗi thất bại → dừng chuỗi tự động")
+                return
 
             for i, (idx, x, y, z) in enumerate(self.csv_data):
                 if self.auto_stop:
                     break
                 self.log(f"🔄 Điểm {i+1}/{len(self.csv_data)} (idx={idx})")
                 self._move(x, y, z)
-                time.sleep(5)
+                time.sleep(3)
                 self._move(x, y, PICK_Z)
+                time.sleep(1)
+                self._move(x, y, PICK_Z-10)
                 time.sleep(WAIT_PICK)
-                self._move(x, y, PICK_Z-4)
-                time.sleep(WAIT_PICK)
-                self._move(*HOME_POS)
-                time.sleep(WAIT_HOME)
                 self.progress_bar.setValue(i+1)
+
+                # Cu sau moi HOME_INTERVAL diem thi cho robot ve HOME 1 lan
+                if (i + 1) % HOME_INTERVAL == 0 and not self.auto_stop:
+                    self.log(f"🏠 Đã xong {i+1} điểm → về HOME")
+                    if not self._move_home():
+                        self.log("⛔ HOME thất bại giữa chuỗi → dừng chuỗi tự động")
+                        return
+
+            # Neu diem cuoi cung khong roi dung vao moc HOME_INTERVAL thi ve HOME lan cuoi
+            if not self.auto_stop and len(self.csv_data) % HOME_INTERVAL != 0:
+                if not self._move_home():
+                    self.log("⛔ HOME cuối chuỗi thất bại")
+                    return
 
             self.status_label.setText("✅ Hoàn thành tự động")
             self.log("✅ Hoàn thành chuỗi tự động")

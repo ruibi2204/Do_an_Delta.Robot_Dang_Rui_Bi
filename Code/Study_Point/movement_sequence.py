@@ -9,10 +9,10 @@ from uart_comm import UARTComm
 import threading
 # ---- Cấu hình ----
 HOME_POS = (0.0, 0.0, 300.0)        # Vị trí về nhà (z cao)
-PICK_Z = 330                # Chiều cao khi hạ xuống (giữ nguyên x,y)
+PICK_Z = 349                # Chiều cao khi hạ xuống (giữ nguyên x,y)
 LIFT_OFFSET = 4.0                 # mm nâng lên sau khi giữ tại PICK_Z (z giảm đi = nâng lên)
-WAIT_HOME = 5                     # giây đứng yên tại HOME
-WAIT_PICK = 3                     # giây đứng yên tại PICK
+WAIT_HOME = 3                     # giây đứng yên tại HOME
+WAIT_PICK = 2                     # giây đứng yên tại PICK
 
 # Danh sách các điểm cần đến (mỗi điểm là tuple (x,y,z))
 # Ở đây tôi định nghĩa vài điểm mẫu, bạn có thể thay đổi.

@@ -1,7 +1,10 @@
 import sys
 import os
 import tkinter as tk
+
+# Thêm thư mục hiện tại vào sys.path để import các module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 def check_dependencies() -> bool:
     missing = []
     try:
@@ -62,8 +65,8 @@ def main():
     if not check_dependencies():
         sys.exit(1)
 
-    # Import GUI có tích hợp camera
-    from gui.controller_gui import DeltaRobotGUI
+    # Import GUI đã sửa để vẽ đường thẳng (file gui_control.py)
+    from gui_control import DeltaRobotGUI
 
     root = tk.Tk()
     _apply_ttk_style(root)
@@ -87,7 +90,8 @@ def main():
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     print("=" * 50)
-    print("  DELTA ROBOT TRAJECTORY CONTROLLER")
+    print("  DELTA ROBOT — LINE DRAW CONTROLLER")
+    print("  Vẽ đường thẳng giữa hai điểm đã chọn.")
     print("  Tab [QUỸ ĐẠO] — hiển thị quỹ đạo mô phỏng")
     print("  Tab [CAMERA]  — quan sát robot vẽ thực tế")
     print("  Nhấn Ctrl+C tại terminal để thoát")

@@ -3,7 +3,12 @@ from tkinter import (ttk, messagebox, font as tkfont)
 import time
 from typing import Optional
 from kinematics.inverse_kinematics import inverse_kinematics
-from trajectory.generator import generate_circle, generate_square, generate_triangle
+# Dòng 6 trong controller_gui.py
+# Từ:
+from trajectory.generator import generate_line
+# Giữ nguyên, nhưng cần đảm bảo __init__.py không chặn.
+
+# Tuy nhiên, __init__.py vẫn bị load trước, nên vẫn lỗi. Vì vậy bắt buộc phải sửa __init__.py.
 from communication.uart_comm import UARTComm
 import threading
 import math
@@ -31,19 +36,18 @@ C = {
 
 
 class DeltaRobotGUI:
-    """Cửa sổ chính điều khiển Robot Delta — có tích hợp camera quan sát."""
+    """Cửa sổ chính điều khiển Robot Delta — vẽ đường thẳng + camera."""
 
-    # ── Giữ nguyên toàn bộ hằng số gốc ───────────────────────────────────────
-    GEAR_RATIO = 3.2
+    GEAR_RATIO = 3.0
     STEP_DELAY_MS = 10
-    Z_LIFT = 3
+    Z_LIFT = 0
 
     def __init__(self, root: tk.Tk):
         self.root = root
         self._setup_window()
         self._build_ui()
 
-        # Trạng thái — giữ nguyên từ code gốc
+        # Trạng thái
         self._trajectory: list = []
         self._step_idx: int = 0
         self._running: bool = False
@@ -54,14 +58,14 @@ class DeltaRobotGUI:
 
         self._uart: Optional[UARTComm] = None
 
-        # Camera state
+        # Camera
         self._cap = None
         self._camera_running = False
         self._camera_thread = None
         self._cam_index = 0
-        self._camera_label_img = None  # giữ reference tránh GC
+        self._camera_label_img = None
 
-        self._log("SYS", "Delta Robot Controller khởi động thành công")
+        self._log("SYS", "Delta Robot Controller (Line drawing mode) khởi động thành công")
         self._log("SYS", f"R=93 a=130 b=298 r=40 mm | Tỉ số đai u={self.GEAR_RATIO}")
 
         if not CV2_AVAILABLE:
@@ -69,7 +73,7 @@ class DeltaRobotGUI:
 
     # ── WINDOW SETUP ──────────────────────────────────────────────────────────
     def _setup_window(self):
-        self.root.title("Delta Robot — Trajectory Controller")
+        self.root.title("Delta Robot — Line Draw")
         self.root.configure(bg=C["bg"])
         self.root.state("zoomed")
         try:
@@ -78,7 +82,7 @@ class DeltaRobotGUI:
             pass
 
     # ══════════════════════════════════════════════════════════════════════════
-    # BUILD UI  (layout: left panel | notebook[trajectory / camera] | bottom)
+    # BUILD UI
     # ══════════════════════════════════════════════════════════════════════════
     def _build_ui(self):
         self._build_header()
@@ -89,10 +93,10 @@ class DeltaRobotGUI:
         main.rowconfigure(0, weight=1)
 
         self._build_left_panel(main)
-        self._build_center_notebook(main)   # ← thay _build_canvas
+        self._build_center_notebook(main)
         self._build_bottom_panel()
 
-    # ── HEADER (giữ nguyên) ───────────────────────────────────────────────────
+    # ── HEADER ────────────────────────────────────────────────────────────────
     def _build_header(self):
         hdr = tk.Frame(self.root, bg=C["bg2"], height=44)
         hdr.pack(fill="x")
@@ -100,7 +104,7 @@ class DeltaRobotGUI:
 
         tk.Label(hdr, text="●", fg=C["green"], bg=C["bg2"],
                  font=("Courier", 12)).pack(side="left", padx=(12, 4), pady=8)
-        tk.Label(hdr, text="DELTA ROBOT — TRAJECTORY CONTROLLER",
+        tk.Label(hdr, text="DELTA ROBOT — LINE DRAW",
                  fg=C["accent"], bg=C["bg2"],
                  font=("Courier", 13, "bold")).pack(side="left", pady=8)
 
@@ -113,9 +117,7 @@ class DeltaRobotGUI:
                  fg=C["muted"], bg=C["bg2"],
                  font=("Courier", 9)).pack(side="right", padx=24)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # CENTER — Notebook với 2 tab: Quỹ đạo & Camera
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── CENTER NOTEBOOK ──────────────────────────────────────────────────────
     def _build_center_notebook(self, parent):
         style = ttk.Style()
         style.theme_use("default")
@@ -134,19 +136,19 @@ class DeltaRobotGUI:
         nb = ttk.Notebook(parent, style="Dark.TNotebook")
         nb.grid(row=0, column=1, sticky="nsew")
 
-        # ── Tab 1: Quỹ đạo (giữ nguyên canvas gốc) ──────────────────────────
+        # Tab quỹ đạo
         traj_tab = tk.Frame(nb, bg=C["bg"])
         nb.add(traj_tab, text="  📐  QUỸ ĐẠO  ")
         self._build_canvas_in(traj_tab)
 
-        # ── Tab 2: Camera quan sát ───────────────────────────────────────────
+        # Tab camera
         cam_tab = tk.Frame(nb, bg=C["bg"])
         nb.add(cam_tab, text="  📷  CAMERA  ")
         self._build_camera_tab(cam_tab)
 
         self._notebook = nb
 
-    # ── TAB QUỸ ĐẠO (canvas gốc, không đổi gì) ───────────────────────────────
+    # ── CANVAS (tab quỹ đạo) ────────────────────────────────────────────────
     def _build_canvas_in(self, parent):
         self._canvas = tk.Canvas(parent, bg=C["bg"], highlightthickness=0)
         self._canvas.pack(fill="both", expand=True)
@@ -157,7 +159,6 @@ class DeltaRobotGUI:
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
 
-        # Thanh điều khiển camera (trên cùng)
         ctrl = tk.Frame(parent, bg=C["bg2"], height=42)
         ctrl.grid(row=0, column=0, sticky="ew")
         ctrl.pack_propagate(False)
@@ -173,7 +174,6 @@ class DeltaRobotGUI:
                               font=("Courier", 9), relief="flat", bd=1)
         cam_spin.pack(side="left", padx=4)
 
-        # Nút bật/tắt camera
         self._cam_btn = tk.Button(ctrl, text="▶  BẬT CAMERA",
                                   bg=C["green"], fg=C["bg"],
                                   font=("Courier", 9, "bold"),
@@ -181,19 +181,16 @@ class DeltaRobotGUI:
                                   command=self._toggle_camera)
         self._cam_btn.pack(side="left", padx=8)
 
-        # Trạng thái camera
         self._cam_status = tk.Label(ctrl, text="● Tắt",
                                     fg=C["red"], bg=C["bg2"],
                                     font=("Courier", 9, "bold"))
         self._cam_status.pack(side="left", padx=8)
 
-        # Ghi chú nhỏ
         tk.Label(ctrl,
                  text="(chỉ để quan sát — không ảnh hưởng điều khiển)",
                  fg=C["muted"], bg=C["bg2"],
                  font=("Courier", 8)).pack(side="right", padx=12)
 
-        # Vùng hiển thị camera
         cam_container = tk.Frame(parent, bg=C["bg"])
         cam_container.grid(row=1, column=0, sticky="nsew")
         cam_container.columnconfigure(0, weight=1)
@@ -205,7 +202,7 @@ class DeltaRobotGUI:
                                    font=("Courier", 11))
         self._cam_label.grid(row=0, column=0, sticky="nsew")
 
-        # Overlay thông tin (góc khớp + end-effector) — hiển thị khi camera bật
+        # Overlay thông tin
         self._cam_overlay = tk.Frame(cam_container, bg=C["bg2"],
                                      padx=10, pady=6)
         self._cam_overlay.place(relx=0.01, rely=0.01, anchor="nw")
@@ -232,7 +229,7 @@ class DeltaRobotGUI:
                                      font=("Courier", 9))
         self._ov_progress.pack(anchor="w")
 
-        # Placeholder khi chưa bật camera
+        # Placeholder
         self._cam_placeholder = tk.Label(
             cam_container,
             text=(
@@ -250,7 +247,7 @@ class DeltaRobotGUI:
         self._cam_placeholder.place(relx=0.5, rely=0.5, anchor="center")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # CAMERA LOGIC
+    # CAMERA LOGIC (không đổi)
     # ══════════════════════════════════════════════════════════════════════════
     def _toggle_camera(self):
         if self._camera_running:
@@ -281,7 +278,6 @@ class DeltaRobotGUI:
         self._cam_status.configure(text="● Đang chạy", fg=C["green"])
         self._cam_placeholder.place_forget()
 
-        # Chạy capture trong thread riêng để không block GUI
         self._camera_thread = threading.Thread(
             target=self._camera_loop, daemon=True)
         self._camera_thread.start()
@@ -290,10 +286,7 @@ class DeltaRobotGUI:
 
     def _stop_camera(self):
         self._camera_running = False
-        # Thread sẽ tự dừng do flag
-
         if self._cap:
-            # Đợi thread kết thúc rồi mới release
             if self._camera_thread and self._camera_thread.is_alive():
                 self._camera_thread.join(timeout=1.0)
             self._cap.release()
@@ -303,88 +296,64 @@ class DeltaRobotGUI:
         self._cam_status.configure(text="● Tắt", fg=C["red"])
         self._cam_label.configure(image="")
         self._camera_label_img = None
-
-        # Hiện lại placeholder
         self._cam_placeholder.place(relx=0.5, rely=0.5, anchor="center")
         self._log("INFO", "Tắt camera")
 
     def _camera_loop(self):
-        """Chạy trong thread riêng: đọc frame liên tục, gửi sang GUI."""
         while self._camera_running and self._cap and self._cap.isOpened():
             ret, frame = self._cap.read()
             if not ret:
                 break
-            # Gửi frame sang main thread để hiển thị
             self.root.after(0, self._update_camera_frame, frame)
-            # ~30 fps
             time.sleep(0.033)
-
-        # Nếu stream bị ngắt từ bên ngoài (mất kết nối USB…)
         if self._camera_running:
             self.root.after(0, self._on_camera_disconnected)
 
     def _update_camera_frame(self, frame):
-        """Gọi từ main thread — cập nhật Label với frame mới."""
         if not self._camera_running:
             return
-
-        # Lấy kích thước vùng hiển thị
         lw = self._cam_label.winfo_width()
         lh = self._cam_label.winfo_height()
         if lw < 10 or lh < 10:
             return
-
-        # Resize giữ tỉ lệ
         fh, fw = frame.shape[:2]
         ratio = min(lw / fw, lh / fh)
         nw, nh = int(fw * ratio), int(fh * ratio)
         if nw < 2 or nh < 2:
             return
-
         frame_resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
         frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-
         img = Image.fromarray(frame_rgb)
         photo = ImageTk.PhotoImage(image=img)
-
         self._cam_label.configure(image=photo)
-        self._camera_label_img = photo   # giữ reference
-
-        # Cập nhật overlay thông tin live
+        self._camera_label_img = photo
         self._update_cam_overlay()
 
     def _update_cam_overlay(self):
-        """Cập nhật thông tin XYZ / góc khớp trên overlay camera."""
         try:
             x = self._xyz_vars["x"].get()
             y = self._xyz_vars["y"].get()
             z = self._xyz_vars["z"].get()
-            self._ov_xyz.configure(
-                text=f"X: {x}   Y: {y}   Z: {z}")
-
+            self._ov_xyz.configure(text=f"X: {x}   Y: {y}   Z: {z}")
             a1 = self._angle_vars[0].get()
             a2 = self._angle_vars[1].get()
             a3 = self._angle_vars[2].get()
-            self._ov_angles.configure(
-                text=f"θ₁: {a1}   θ₂: {a2}   θ₃: {a3}")
-
+            self._ov_angles.configure(text=f"θ₁: {a1}   θ₂: {a2}   θ₃: {a3}")
             total = len(self._trajectory)
             if total > 0:
                 pct = 100 * self._step_idx / total
-                self._ov_progress.configure(
-                    text=f"Tiến độ: {self._step_idx}/{total}  ({pct:.0f}%)")
+                self._ov_progress.configure(text=f"Tiến độ: {self._step_idx}/{total}  ({pct:.0f}%)")
             else:
                 self._ov_progress.configure(text="Tiến độ: —")
         except Exception:
             pass
 
     def _on_camera_disconnected(self):
-        """Xử lý khi camera bị ngắt kết nối đột ngột."""
         self._log("ERR", "Camera bị ngắt kết nối")
         self._stop_camera()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # LEFT PANEL (giữ nguyên hoàn toàn từ code gốc)
+    # LEFT PANEL (đã sửa để chỉ có tham số đường thẳng)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_left_panel(self, parent):
         lf = tk.Frame(parent, bg=C["bg2"], width=300)
@@ -428,36 +397,18 @@ class DeltaRobotGUI:
         self._fill_left_panel(inner)
 
     def _fill_left_panel(self, inner):
-        """Giữ nguyên hoàn toàn từ code gốc."""
         pad = dict(padx=10)
 
-        self._section_label(inner, "CHỌN HÌNH VẼ", **pad)
-        self._shape_var = tk.StringVar(value="circle")
-        shapes = [("⬤   TRÒN", "circle"),
-                  ("■    VUÔNG", "square"),
-                  ("▲   TAM GIÁC ĐỀU", "triangle")]
-        self._shape_btns = {}
-        for text, val in shapes:
-            b = tk.Button(inner, text=text, anchor="w",
-                          bg=C["bg3"], fg=C["text"],
-                          activebackground=C["accent"], activeforeground=C["bg"],
-                          relief="flat", bd=0, padx=10, pady=6,
-                          font=("Courier", 11),
-                          command=lambda v=val: self._select_shape(v))
-            b.pack(fill="x", pady=2, **pad)
-            self._shape_btns[val] = b
-
-        self._sep(inner)
-
-        self._section_label(inner, "THAM SỐ HÌNH", **pad)
+        # ── THAM SỐ ĐƯỜNG THẲNG ──────────────────────────────────────────────
+        self._section_label(inner, "THAM SỐ ĐƯỜNG THẲNG", **pad)
         self._param_frame = tk.Frame(inner, bg=C["bg2"])
         self._param_frame.pack(fill="x", **pad)
         self._params: dict[str, tk.DoubleVar] = {}
-
-        self._select_shape("circle", init=True)
+        self._build_params_line()   # khởi tạo
 
         self._sep(inner)
 
+        # ── TỐC ĐỘ ─────────────────────────────────────────────────────────────
         self._section_label(inner, "TỐC ĐỘ VẼ", **pad)
         spd_row = tk.Frame(inner, bg=C["bg2"])
         spd_row.pack(fill="x", **pad)
@@ -473,6 +424,7 @@ class DeltaRobotGUI:
 
         self._sep(inner)
 
+        # ── SERIAL ─────────────────────────────────────────────────────────────
         self._section_label(inner, "SERIAL / UART", **pad)
         port_row = tk.Frame(inner, bg=C["bg2"])
         port_row.pack(fill="x", pady=2, **pad)
@@ -505,6 +457,7 @@ class DeltaRobotGUI:
 
         self._sep(inner)
 
+        # ── ĐIỀU KHIỂN ─────────────────────────────────────────────────────────
         self._section_label(inner, "ĐIỀU KHIỂN", **pad)
         self._run_btn = tk.Button(inner, text="▶  BẮT ĐẦU VẼ",
                                   bg=C["accent"], fg=C["bg"],
@@ -528,6 +481,8 @@ class DeltaRobotGUI:
         self._reset_btn.pack(fill="x", pady=2, **pad)
 
         self._sep(inner)
+
+        # ── PROGRESS ──────────────────────────────────────────────────────────
         self._progress_var = tk.DoubleVar(value=0)
         tk.Label(inner, text="TIẾN ĐỘ", fg=C["muted"], bg=C["bg2"],
                  font=("Courier", 8)).pack(anchor="w", **pad)
@@ -541,8 +496,41 @@ class DeltaRobotGUI:
 
         tk.Frame(inner, bg=C["bg2"], height=12).pack()
 
+    # ── PARAMETERS LINE ──────────────────────────────────────────────────────
+    def _clear_params(self):
+        for w in self._param_frame.winfo_children():
+            w.destroy()
+        self._params.clear()
+
+    def _add_param_row(self, label: str, key: str, default: float,
+                       unit: str = "mm", mn: float = 1, mx: float = 500):
+        row = tk.Frame(self._param_frame, bg=C["bg3"], pady=3, padx=6)
+        row.pack(fill="x", pady=1)
+        tk.Label(row, text=f"{label}:", fg=C["muted"], bg=C["bg3"],
+                 font=("Courier", 9), width=12, anchor="w").pack(side="left")
+        var = tk.DoubleVar(value=default)
+        sp = tk.Spinbox(row, from_=mn, to=mx, increment=1,
+                        textvariable=var, width=7,
+                        bg=C["bg"], fg=C["text"],
+                        buttonbackground=C["bg3"],
+                        font=("Courier", 10),
+                        relief="flat", bd=1)
+        sp.pack(side="left", padx=4)
+        tk.Label(row, text=unit, fg=C["muted"], bg=C["bg3"],
+                 font=("Courier", 9)).pack(side="left")
+        self._params[key] = var
+
+    def _build_params_line(self):
+        self._clear_params()
+        self._add_param_row("Điểm đầu X", "start_x", -50, "mm", -100, 100)
+        self._add_param_row("Điểm đầu Y", "start_y", -50, "mm", -100, 100)
+        self._add_param_row("Điểm cuối X", "end_x", 50, "mm", -100, 100)
+        self._add_param_row("Điểm cuối Y", "end_y", 50, "mm", -100, 100)
+        self._add_param_row("Độ cao Z", "z", -250, "mm", -350, -150)
+        self._add_param_row("Số điểm N", "n", 100, "pts", 2, 200)
+
     # ══════════════════════════════════════════════════════════════════════════
-    # BOTTOM PANEL (giữ nguyên hoàn toàn)
+    # BOTTOM PANEL (không đổi)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_bottom_panel(self):
         bot = tk.Frame(self.root, bg=C["bg2"], height=180)
@@ -612,99 +600,25 @@ class DeltaRobotGUI:
         self._log_text.tag_config("warn", foreground=C["yellow"])
 
     # ══════════════════════════════════════════════════════════════════════════
-    # PARAM PANELS (giữ nguyên hoàn toàn)
-    # ══════════════════════════════════════════════════════════════════════════
-    def _clear_params(self):
-        for w in self._param_frame.winfo_children():
-            w.destroy()
-        self._params.clear()
-
-    def _add_param_row(self, label: str, key: str, default: float,
-                       unit: str = "mm", mn: float = 1, mx: float = 500):
-        row = tk.Frame(self._param_frame, bg=C["bg3"], pady=3, padx=6)
-        row.pack(fill="x", pady=1)
-        tk.Label(row, text=f"{label}:", fg=C["muted"], bg=C["bg3"],
-                 font=("Courier", 9), width=12, anchor="w").pack(side="left")
-        var = tk.DoubleVar(value=default)
-        sp = tk.Spinbox(row, from_=mn, to=mx, increment=1,
-                        textvariable=var, width=7,
-                        bg=C["bg"], fg=C["text"],
-                        buttonbackground=C["bg3"],
-                        font=("Courier", 10),
-                        relief="flat", bd=1)
-        sp.pack(side="left", padx=4)
-        tk.Label(row, text=unit, fg=C["muted"], bg=C["bg3"],
-                 font=("Courier", 9)).pack(side="left")
-        self._params[key] = var
-
-    def _build_params_circle(self):
-        self._clear_params()
-        self._add_param_row("Bán kính R", "radius", 10, "mm", 5, 120)
-        self._add_param_row("Tâm X", "cx", 0, "mm", -80, 80)
-        self._add_param_row("Tâm Y", "cy", 0, "mm", -80, 80)
-        self._add_param_row("Độ cao Z", "z", -250, "mm", -350, -150)
-        self._add_param_row("Số điểm N", "n", 100, "pts", 8, 360)
-
-    def _build_params_square(self):
-        self._clear_params()
-        self._add_param_row("Cạnh A", "side", 10, "mm", 10, 150)
-        self._add_param_row("Tâm X", "cx", 0, "mm", -80, 80)
-        self._add_param_row("Tâm Y", "cy", 0, "mm", -80, 80)
-        self._add_param_row("Độ cao Z", "z", -250, "mm", -350, -150)
-        self._add_param_row("Pts/cạnh", "n", 50, "pts", 2, 100)
-
-    def _build_params_triangle(self):
-        self._clear_params()
-        self._add_param_row("Cạnh A", "side", 10, "mm", 10, 150)
-        self._add_param_row("Tâm X", "cx", 0, "mm", -80, 80)
-        self._add_param_row("Tâm Y", "cy", 0, "mm", -80, 80)
-        self._add_param_row("Độ cao Z", "z", -250, "mm", -350, -150)
-        self._add_param_row("Pts/cạnh", "n", 50, "pts", 2, 100)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # LOGIC CHỌN HÌNH (giữ nguyên)
-    # ══════════════════════════════════════════════════════════════════════════
-    def _select_shape(self, shape: str, init: bool = False):
-        self._shape_var.set(shape)
-        for k, b in self._shape_btns.items():
-            b.configure(
-                bg=C["accent"] if k == shape else C["bg3"],
-                fg=C["bg"] if k == shape else C["text"],
-            )
-        if shape == "circle":
-            self._build_params_circle()
-        elif shape == "square":
-            self._build_params_square()
-        else:
-            self._build_params_triangle()
-        if not init:
-            self._reset()
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SINH QUỸ ĐẠO (giữ nguyên hoàn toàn — không đổi công thức)
+    # LOGIC SINH QUỸ ĐẠO (ĐƯỜNG THẲNG)
     # ══════════════════════════════════════════════════════════════════════════
     def _generate_trajectory(self) -> list:
         p = {k: v.get() for k, v in self._params.items()}
-        shape = self._shape_var.get()
         try:
-            if shape == "circle":
-                return generate_circle(
-                    radius=p["radius"], cx=p["cx"], cy=p["cy"],
-                    z=p["z"], n_points=int(p["n"]))
-            elif shape == "square":
-                return generate_square(
-                    side=p["side"], cx=p["cx"], cy=p["cy"],
-                    z=p["z"], n_per_side=int(p["n"]))
-            else:
-                return generate_triangle(
-                    side=p["side"], cx=p["cx"], cy=p["cy"],
-                    z=p["z"], n_per_side=int(p["n"]))
+            start = (p["start_x"], p["start_y"], p["z"])
+            end   = (p["end_x"],   p["end_y"],   p["z"])
+            return generate_line(
+                start=start,
+                end=end,
+                n_points=int(p["n"]),
+                include_endpoint=True
+            )
         except Exception as e:
             messagebox.showerror("Lỗi tham số", str(e))
             return []
 
     # ══════════════════════════════════════════════════════════════════════════
-    # CANVAS & VẼ (giữ nguyên hoàn toàn)
+    # CANVAS & VẼ (không đổi)
     # ══════════════════════════════════════════════════════════════════════════
     def _on_canvas_resize(self, event):
         self._draw_canvas()
@@ -777,7 +691,7 @@ class DeltaRobotGUI:
                                  fill=C["accent"], outline="")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # ĐIỀU KHIỂN CHẠY (giữ nguyên hoàn toàn — không đổi gì)
+    # ĐIỀU KHIỂN CHẠY (không đổi)
     # ══════════════════════════════════════════════════════════════════════════
     def _toggle_run(self):
         if self._running:
@@ -800,7 +714,7 @@ class DeltaRobotGUI:
         self._running = True
 
         self._run_btn.configure(text="■  DỪNG", bg=C["red"])
-        self._log("INFO", f"Bắt đầu vẽ {self._shape_var.get().upper()} — {len(traj)} điểm")
+        self._log("INFO", f"Bắt đầu vẽ đường thẳng — {len(traj)} điểm")
         self._draw_canvas()
         self._step()
 
@@ -922,7 +836,7 @@ class DeltaRobotGUI:
         self._log("INFO", "Đặt lại hoàn tất")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # CẬP NHẬT GÓC + XYZ (giữ nguyên hoàn toàn)
+    # CẬP NHẬT GÓC + XYZ
     # ══════════════════════════════════════════════════════════════════════════
     def _update_angles(self, t_set, t_ctrl, Px, Py, Pz):
         s1, s2, s3 = t_set
@@ -948,7 +862,7 @@ class DeltaRobotGUI:
             )
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SERIAL KẾT NỐI (giữ nguyên hoàn toàn)
+    # SERIAL KẾT NỐI
     # ══════════════════════════════════════════════════════════════════════════
     def _toggle_connect(self):
         if self._uart and self._uart.is_connected:
@@ -983,7 +897,7 @@ class DeltaRobotGUI:
         self._log("INFO", "Gửi lệnh HOME")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # LOG (giữ nguyên hoàn toàn)
+    # LOG
     # ══════════════════════════════════════════════════════════════════════════
     def _log(self, level: str, msg: str):
         tag_map = {"OK": "ok", "ERR": "err", "INFO": "info",
@@ -1003,7 +917,7 @@ class DeltaRobotGUI:
         self._log_text.configure(state="disabled")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TIỆN ÍCH UI (giữ nguyên)
+    # TIỆN ÍCH UI
     # ══════════════════════════════════════════════════════════════════════════
     def _section_label(self, parent, text: str, **pack_kwargs):
         tk.Label(parent, text=text, fg=C["muted"], bg=parent["bg"],
@@ -1014,9 +928,15 @@ class DeltaRobotGUI:
         tk.Frame(parent, bg=C["border"], height=1).pack(
             fill="x", pady=6, **pack_kwargs)
 
-    # ── Cleanup khi đóng cửa sổ ──────────────────────────────────────────────
     def on_closing(self):
-        """Gọi khi người dùng đóng cửa sổ — dừng camera an toàn."""
         if self._camera_running:
             self._stop_camera()
         self.root.destroy()
+
+
+# ==================== CHẠY ỨNG DỤNG ====================
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = DeltaRobotGUI(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_closing)
+    root.mainloop()

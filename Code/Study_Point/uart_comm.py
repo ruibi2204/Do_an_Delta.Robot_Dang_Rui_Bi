@@ -1,6 +1,7 @@
 import time
 import threading
 from typing import Optional, Callable
+
 try:
     import serial
     import serial.tools.list_ports
@@ -88,6 +89,7 @@ class UARTComm:
             return False
 
     def send_home(self) -> bool:
+        """Gửi lệnh HOME (không chờ phản hồi)."""
         cmd = "HOME\n"
         if self.dry_run:
             self.log("[TX-DRY] HOME")
@@ -104,6 +106,68 @@ class UARTComm:
         except Exception as e:
             self.log(f"[ERR] HOME thất bại: {e}")
             return False
+
+    def send_home_and_wait(self, timeout: float = 20.0) -> bool:
+        """
+        Gửi lệnh HOME và chờ STM32 phản hồi với một trong các từ khóa:
+        'READY', 'OK', 'HOME_DONE', 'HOME OK' (không phân biệt hoa/thường).
+        Trả về True nếu nhận được trong timeout, ngược lại False.
+        """
+        if self.dry_run:
+            self.log("[DRY-RUN] Giả lập HOME và chờ phản hồi -> OK")
+            return True
+
+        if not self._connected or self._serial is None:
+            self.log("[ERR] Chưa kết nối Serial!")
+            return False
+
+        # Gửi lệnh HOME (có thể thử thêm \r\n nếu cần, nhưng giữ nguyên \n)
+        cmd = "HOME\n"
+        try:
+            with self._lock:
+                self._serial.write(cmd.encode("ascii"))
+                self._serial.flush()
+            self.log("[TX] HOME")
+        except Exception as e:
+            self.log(f"[ERR] Gửi HOME thất bại: {e}")
+            return False
+
+        # Chờ phản hồi
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            line = self._readline(timeout=5)
+            if line is None:
+                continue
+            upper = line.strip().upper()
+            # Chấp nhận nhiều từ khóa phổ biến
+            if any(keyword in upper for keyword in ["READY", "OK", "HOME_DONE", "HOME OK"]):
+                self.log(f"[RX] Nhận phản hồi: {line}")
+                return True
+            # Log các dòng khác để debug
+            self.log(f"[RX] Dòng nhận được: {line}")
+
+        self.log("[ERR] Timeout chờ phản hồi HOME")
+        return False
+
+    def _readline(self, timeout: float = 0.5) -> Optional[str]:
+        """
+        Đọc một dòng từ serial (kết thúc bằng '\n') với timeout.
+        Trả về chuỗi nếu thành công, None nếu timeout hoặc lỗi.
+        """
+        if self.dry_run or self._serial is None:
+            return None
+        try:
+            with self._lock:
+                old_timeout = self._serial.timeout
+                self._serial.timeout = timeout
+                line = self._serial.readline()
+                self._serial.timeout = old_timeout
+            if line:
+                return line.decode('ascii', errors='ignore').strip()
+            return None
+        except Exception as e:
+            self.log(f"[ERR] Lỗi đọc serial: {e}")
+            return None
 
     @staticmethod
     def list_ports() -> list[str]:

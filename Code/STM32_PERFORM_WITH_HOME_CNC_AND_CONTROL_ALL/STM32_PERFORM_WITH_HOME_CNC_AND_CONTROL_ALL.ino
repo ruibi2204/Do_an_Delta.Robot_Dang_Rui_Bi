@@ -9,11 +9,11 @@
 #define SW2 PB0
 #define SW3 PA7
 #define HOME_BTN PB1
-#define HOMING_SPEED_FAST 1000
-#define HOMING_SPEED_SLOW 500
-#define HOMING_ACCEL 200
-#define RUN_SPEED 1000
-#define RUN_ACCEL 600
+#define HOMING_SPEED_FAST 500
+#define HOMING_SPEED_SLOW 200
+#define HOMING_ACCEL 50
+#define RUN_SPEED 5000
+#define RUN_ACCEL 2000
 #define BACKOFF_STEPS 800
 
 const float GOC_TO_STEP = 6400.0 / 360.0;
@@ -217,9 +217,9 @@ void xuly_Uart() {
       if (p) target_theta2 = atof(p + 3);
       p = strstr(receivedChars, "T3:");
       if (p) target_theta3 = atof(p + 3);
-      motor1.moveTo((long)(target_theta3 * GOC_TO_STEP));
+      motor1.moveTo((long)(target_theta2 * GOC_TO_STEP));
       motor2.moveTo((long)(target_theta1 * GOC_TO_STEP));
-      motor3.moveTo((long)(target_theta2 * GOC_TO_STEP));
+      motor3.moveTo((long)(target_theta3 * GOC_TO_STEP));
       Serial.print("[UART-RX] M1:");
       Serial.print(target_theta1);
       Serial.print(" | M2:");
