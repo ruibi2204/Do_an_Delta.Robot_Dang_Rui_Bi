@@ -2,7 +2,11 @@ import tkinter as tk
 from tkinter import (ttk, messagebox, font as tkfont)
 import time
 from typing import Optional
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from kinematics.inverse_kinematics import inverse_kinematics
+
 # Dòng 6 trong controller_gui.py
 # Từ:
 from trajectory.generator import generate_line

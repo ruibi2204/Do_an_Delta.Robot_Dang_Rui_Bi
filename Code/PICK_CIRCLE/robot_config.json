@@ -1,0 +1,30 @@
+{
+  "home_position": [
+    70.0,
+    0.0,
+    260.0
+  ],
+  "z_safe": 300.0,
+  "jog_step_xy": 5.0,
+  "jog_step_z": 10.0,
+  "robot_port": "COM5",
+  "robot_baud": 115200,
+  "pneumatic_port": "COM6",
+  "pneumatic_baud": 9600,
+  "camera_index": 0,
+  "calib_file": "calibration_result.npz",
+  "camera_offset_x": 0.0,
+  "camera_offset_y": 0.0,
+  "csv_offset_x": -1.5,
+  "csv_offset_y": -9.0,
+  "csv_match_tolerance": 10.0,
+  "csv_match_same_color": true,
+  "csv_z_pick": 318.0,
+  "turn_pwm": 80,
+  "step_test_angle": 90.0,
+  "coord_mode": "circle",
+  "csv_apply_dof4": false,
+  "csv_dof4_angle": 90.0,
+  "csv_place_x": 0.0,
+  "csv_place_y": 0.0
+}

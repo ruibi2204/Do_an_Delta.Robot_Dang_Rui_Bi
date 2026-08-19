@@ -517,7 +517,7 @@ class DeltaRobotGUI(QMainWindow):
                     idx = int(row.get('corner_index', 0))
                     x_mm = float(row.get('x_mm', 0))
                     y_mm = float(row.get('y_mm', 0))
-                    z_mm = float(row.get('z_mm', 338.0)) if 'z_mm' in row else 338.0
+                    z_mm = float(row.get('z_mm', 345.0)) if 'z_mm' in row else 345.0
                     self.csv_data_raw.append((idx, x_mm, y_mm, z_mm))
             self.log(f"📂 Đã load {len(self.csv_data_raw)} điểm từ CSV (tọa độ gốc, chưa cộng offset)")
             self.apply_offset()
@@ -592,10 +592,10 @@ class DeltaRobotGUI(QMainWindow):
                     break
                 self.log(f"🔄 Điểm {i+1}/{len(self.csv_data)} (idx={idx})")
                 self._move(x, y, z)
-                time.sleep(3)
+                time.sleep(2)
                 self._move(x, y, PICK_Z)
                 time.sleep(1)
-                self._move(x, y, PICK_Z-10)
+                self._move(x, y, PICK_Z-15)
                 time.sleep(WAIT_PICK)
                 self.progress_bar.setValue(i+1)
 
