@@ -15,8 +15,8 @@
 // ===================== CẤU HÌNH STEP =====================
 // Vi bước 1/32 -> 200 * 32 = 6400 xung/vòng
 #define STEPS_PER_REV 6400
-#define STEP_MAX_SPEED 3000.0f   // xung/giây
-#define STEP_ACCEL     2000.0f   // xung/giây^2
+#define STEP_MAX_SPEED 10000.0f   // xung/giây
+#define STEP_ACCEL     5000.0f   // xung/giây^2
 
 AccelStepper stepMotor(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 

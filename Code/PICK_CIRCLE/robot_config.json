@@ -2,7 +2,7 @@
   "home_position": [
     70.0,
     0.0,
-    260.0
+    300.0
   ],
   "z_safe": 300.0,
   "jog_step_xy": 5.0,
@@ -19,12 +19,26 @@
   "csv_offset_y": -9.0,
   "csv_match_tolerance": 10.0,
   "csv_match_same_color": true,
-  "csv_z_pick": 318.0,
-  "turn_pwm": 80,
-  "step_test_angle": 90.0,
+  "csv_z_pick": 338.0,
+  "turn_pwm": 100,
+  "step_test_angle": 45.0,
   "coord_mode": "circle",
   "csv_apply_dof4": false,
   "csv_dof4_angle": 90.0,
+  "dyn_z_pick": 305.0,
+  "dyn_rpm": 14.5,
+  "dyn_offset_x": -0.5,
+  "dyn_offset_y": -8.0,
   "csv_place_x": 0.0,
-  "csv_place_y": 0.0
+  "csv_place_y": 0.0,
+  "repeat_ax": 10.0,
+  "repeat_ay": 10.0,
+  "repeat_bx": -10.0,
+  "repeat_by": 10.0,
+  "repeat_count": 10,
+  "run4dof_rpm": 14.8,
+  "run4dof_z_pick": 306.0,
+  "run4dof_offset_x": -0.5,
+  "run4dof_offset_y": -6.0,
+  "run4dof_recal_every_n": 3
 }
