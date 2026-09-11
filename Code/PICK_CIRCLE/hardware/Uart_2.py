@@ -41,6 +41,7 @@ except ImportError:
 
 DEFAULT_PORT = "COM3"
 DEFAULT_BAUD = 115200
+TURN_MAX_RPM = 60.0   # phải khớp với TURN_MAX_RPM bên firmware Arduino
 
 
 class PneumaticComm:
@@ -129,12 +130,13 @@ class PneumaticComm:
         return self.send_cmd("PUMP:0")
 
     # ---- Lệnh tiện ích: BÀN XOAY (PWM 0-255) ----
-    def turn_set_speed(self, speed: int) -> bool:
-        speed = max(0, min(255, int(speed)))
-        return self.send_cmd(f"TURN:{speed}")
+    # ---- Lệnh tiện ích: BÀN XOAY (RPM - vòng/phút, âm = ngược chiều) ----
+    def turn_set_speed(self, rpm: float) -> bool:
+        rpm = max(-TURN_MAX_RPM, min(TURN_MAX_RPM, float(rpm)))
+        return self.send_cmd(f"TURN:{rpm}")
 
     def turn_off(self) -> bool:
-        return self.turn_set_speed(0)
+        return self.turn_set_speed(0.0)
 
     # ---- Lệnh tiện ích: BẬC TỰ DO 4 (STEP - GÓC QUAY) ----
     def step_rotate(self, degree: float) -> bool:

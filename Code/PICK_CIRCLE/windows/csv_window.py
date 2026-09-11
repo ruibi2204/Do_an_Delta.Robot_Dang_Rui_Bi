@@ -228,7 +228,7 @@ class CsvWindow(BaseTabWindow):
         if not self.ctx.csv_points:
             QMessageBox.warning(self, "Không có dữ liệu", "Danh sách điểm đang trống, không có gì để lưu.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Lưu danh sách điểm", "../point.csv", "CSV files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "Lưu danh sách điểm", "../CSV_file/point.csv", "CSV files (*.csv)")
         if not path:
             return
         try:

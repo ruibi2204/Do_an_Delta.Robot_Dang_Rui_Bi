@@ -210,14 +210,14 @@ class DeltaMotionPlanner:
             print(f"[CẢNH BÁO] Xoay bậc tự do 4 thất bại: {e}")
         time.sleep(self.TIME_DELAY_DOF4)
 
-    def pick_and_place_dof4(self, point_a, z_pick=300, gripper_callback=None,
+    def pick_and_place_dof4(self, point_a, z_pick=295, gripper_callback=None,
                              rotate_callback=None, object_angle_deg=None,
                              place_point=(0.0, 0.0), target_angle_deg=90.0):
 
         ax, ay = point_a
         bx, by = place_point
-        z_action_pick = z_pick + 12
-        z_action_place = z_pick + 5
+        z_action_pick = z_pick + 15
+        z_action_place = z_pick + 8
 
         rotation_needed = None
         if object_angle_deg is not None:
@@ -242,7 +242,7 @@ class DeltaMotionPlanner:
 
         try:
             # 1. Đến điểm A trên cao -> hạ Z_pick -> tiến sâu gắp
-            self._move_or_raise(ax, ay, 300, self.TIME_MOVE_FAST)
+            self._move_or_raise(ax, ay, 295, self.TIME_MOVE_FAST)
             self._move_or_raise(ax, ay, z_pick, self.TIME_MOVE_DOWN)
             self._move_or_raise(ax, ay, z_action_pick, self.TIME_MOVE_ACTION)
 
@@ -251,10 +251,10 @@ class DeltaMotionPlanner:
             time.sleep(self.TIME_DELAY_GRIPPER)
 
             # 2. Nhấc lên cao -> XOAY bậc tự do 4 (vật đã được giữ) -> sang điểm thả cố định
-            self._move_or_raise(ax, ay, 300, self.TIME_MOVE_DOWN)
+            self._move_or_raise(ax, ay, 295, self.TIME_MOVE_DOWN)
             self._rotate_dof4(rotate_callback, rotation_needed)
 
-            self._move_or_raise(bx, by, 300, self.TIME_MOVE_FAST)
+            self._move_or_raise(bx, by, 295, self.TIME_MOVE_FAST)
             self._move_or_raise(bx, by, z_pick, self.TIME_MOVE_DOWN)
             self._move_or_raise(bx, by, z_action_place, self.TIME_MOVE_ACTION)
 
@@ -263,7 +263,7 @@ class DeltaMotionPlanner:
             time.sleep(self.TIME_DELAY_GRIPPER)
 
             # 3. Nhấc lên an toàn -> XOAY NGƯỢC LẠI để reset bậc tự do 4 -> về Home
-            self._move_or_raise(bx, by, 300, self.TIME_MOVE_DOWN)
+            self._move_or_raise(bx, by, 295, self.TIME_MOVE_DOWN)
             if rotation_needed is not None:
                 self._rotate_dof4(rotate_callback, -rotation_needed)
 
@@ -276,7 +276,7 @@ class DeltaMotionPlanner:
             self._try_safe_retreat(bx, by)
             raise
 
-    def pick_and_place(self, point_a, point_b, z_pick=300, gripper_callback=None):
+    def pick_and_place(self, point_a, point_b, z_pick=295, gripper_callback=None):
         """Bản KHÔNG có bậc tự do 4 - giữ nguyên y hệt move_delta_4dof.py gốc,
         dùng khi không cần xoay (ví dụ chế độ Cameracircle.py cũ)."""
         return self.pick_and_place_dof4(

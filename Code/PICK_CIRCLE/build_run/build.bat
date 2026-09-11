@@ -4,7 +4,7 @@ rmdir /s /q build
 rmdir /s /q dist
 
 echo Dang build lai...
-pyinstaller --noconfirm --onefile --windowed --icon=icon.ico --name "RobotDelta" --add-data "delta.png;." --add-data "robot_config.json;." --add-data "point.csv;." main.py
+pyinstaller --noconfirm --onefile --windowed --icon=icon.ico --name "RobotDelta" --add-data "delta.png;." --add-data "robot_config.json;." main.py
 
 echo Xong!
 pause

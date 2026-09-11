@@ -8,7 +8,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from shared_state import BaseTabWindow, FnWorker, save_config, UARTComm, SERIAL_AVAILABLE
+from shared_state import (
+    BaseTabWindow, FnWorker, save_config, UARTComm, SERIAL_AVAILABLE,
+    TURNTABLE_MAX_RPM,
+)
 
 
 class ConnectionWindow(BaseTabWindow):
@@ -188,19 +191,23 @@ class ConnectionWindow(BaseTabWindow):
         pump_box.setLayout(pump_layout)
         outer_layout.addWidget(pump_box)
 
-        turn_box = QGroupBox("BÀN XOAY (PWM)")
+        # ---- BÀN XOAY: giờ dùng step 17 (PUL/DIR), firmware nhận thẳng
+        # TURN:<rpm> (vòng/phút, có thể âm). KHÔNG còn khái niệm PWM 0-255
+        # (đó là của driver L298N/DC cũ) - xoá toàn bộ lớp quy đổi PWM. ----
+        turn_box = QGroupBox(f"BÀN XOAY (v/p, tối đa ±{TURNTABLE_MAX_RPM:.0f})")
         turn_box.setObjectName("compactBox")
         turn_layout = QVBoxLayout()
         turn_layout.setSpacing(6)
 
         turn_row1 = QHBoxLayout()
         turn_row1.setSpacing(6)
-        turn_row1.addWidget(QLabel("PWM:"))
-        self.spin_turn_pwm = QSpinBox()
-        self.spin_turn_pwm.setRange(0, 255)
-        self.spin_turn_pwm.setValue(self.ctx.turn_pwm_value)
-        self.spin_turn_pwm.valueChanged.connect(self._on_turn_pwm_changed)
-        turn_row1.addWidget(self.spin_turn_pwm, 1)
+        turn_row1.addWidget(QLabel("RPM:"))
+        self.spin_turn_rpm = QDoubleSpinBox()
+        self.spin_turn_rpm.setRange(-TURNTABLE_MAX_RPM, TURNTABLE_MAX_RPM)
+        self.spin_turn_rpm.setSingleStep(1.0)
+        self.spin_turn_rpm.setValue(self.ctx.turn_rpm_value)
+        self.spin_turn_rpm.valueChanged.connect(self._on_turn_rpm_changed)
+        turn_row1.addWidget(self.spin_turn_rpm, 1)
         self.btn_turn_on = QPushButton("▶ BẬT")
         self.btn_turn_on.setObjectName("deviceOnBtn")
         self.btn_turn_on.clicked.connect(self.on_turn_on)
@@ -216,10 +223,10 @@ class ConnectionWindow(BaseTabWindow):
         self.lbl_turn_state = QLabel("● Đang TẮT")
         self.lbl_turn_state.setObjectName("deviceStateOff")
         turn_row2.addWidget(self.lbl_turn_state, 1)
-        self.btn_turn_apply_pwm = QPushButton("⟳ ÁP DỤNG PWM")
-        self.btn_turn_apply_pwm.setObjectName("deviceApplyBtn")
-        self.btn_turn_apply_pwm.clicked.connect(self.on_turn_apply_pwm)
-        turn_row2.addWidget(self.btn_turn_apply_pwm)
+        self.btn_turn_apply_rpm = QPushButton("⟳ ÁP DỤNG RPM")
+        self.btn_turn_apply_rpm.setObjectName("deviceApplyBtn")
+        self.btn_turn_apply_rpm.clicked.connect(self.on_turn_apply_rpm)
+        turn_row2.addWidget(self.btn_turn_apply_rpm)
         turn_layout.addLayout(turn_row2)
 
         turn_box.setLayout(turn_layout)
@@ -266,7 +273,7 @@ class ConnectionWindow(BaseTabWindow):
 
         self._device_ctrl_widgets = [
             self.btn_pump_on, self.btn_pump_off,
-            self.btn_turn_on, self.btn_turn_off, self.btn_turn_apply_pwm, self.spin_turn_pwm,
+            self.btn_turn_on, self.btn_turn_off, self.btn_turn_apply_rpm, self.spin_turn_rpm,
             self.btn_step_rotate, self.spin_step_test_angle,
         ]
         return outer_box
@@ -285,15 +292,16 @@ class ConnectionWindow(BaseTabWindow):
             self.lbl_pump_state.setObjectName("deviceStateOff")
             self._repolish(self.lbl_pump_state)
 
-    def _on_turn_pwm_changed(self, val):
-        self.ctx.turn_pwm_value = val
-        self.ctx.cfg["turn_pwm"] = val
+    def _on_turn_rpm_changed(self, val):
+        self.ctx.turn_rpm_value = val
+        self.ctx.cfg["turn_rpm"] = val
         save_config(self.ctx.cfg)
 
     def on_turn_on(self):
-        if self.ctx.pneu_uart.turn_set_speed(self.spin_turn_pwm.value()):
+        rpm = self.spin_turn_rpm.value()
+        if self.ctx.pneu_uart.turn_set_speed(rpm):
             self.ctx.turn_state = True
-            self.lbl_turn_state.setText(f"● Đang BẬT (PWM={self.spin_turn_pwm.value()})")
+            self.lbl_turn_state.setText(f"● Đang BẬT (RPM={rpm:.1f})")
             self.lbl_turn_state.setObjectName("deviceStateOn")
             self._repolish(self.lbl_turn_state)
 
@@ -304,12 +312,13 @@ class ConnectionWindow(BaseTabWindow):
             self.lbl_turn_state.setObjectName("deviceStateOff")
             self._repolish(self.lbl_turn_state)
 
-    def on_turn_apply_pwm(self):
+    def on_turn_apply_rpm(self):
         if not self.ctx.turn_state:
-            QMessageBox.information(self, "Bàn xoay đang tắt", "Hãy bấm 'BẬT' trước khi áp dụng PWM mới.")
+            QMessageBox.information(self, "Bàn xoay đang tắt", "Hãy bấm 'BẬT' trước khi áp dụng RPM mới.")
             return
-        if self.ctx.pneu_uart.turn_set_speed(self.spin_turn_pwm.value()):
-            self.lbl_turn_state.setText(f"● Đang BẬT (PWM={self.spin_turn_pwm.value()})")
+        rpm = self.spin_turn_rpm.value()
+        if self.ctx.pneu_uart.turn_set_speed(rpm):
+            self.lbl_turn_state.setText(f"● Đang BẬT (RPM={rpm:.1f})")
 
     def _on_step_test_angle_changed(self, val):
         self.ctx.cfg["step_test_angle"] = val
@@ -401,7 +410,7 @@ class ConnectionWindow(BaseTabWindow):
         self.ctx.cfg["jog_step_z"] = self.ctx.jog_step_z
         self.ctx.cfg["camera_offset_x"] = self.ctx.offset_x
         self.ctx.cfg["camera_offset_y"] = self.ctx.offset_y
-        self.ctx.cfg["turn_pwm"] = self.spin_turn_pwm.value()
+        self.ctx.cfg["turn_rpm"] = self.spin_turn_rpm.value()
         self.ctx.cfg["step_test_angle"] = self.spin_step_test_angle.value()
         self.ctx.cfg["dyn_offset_x"] = self.ctx.dyn_offset_x
         self.ctx.cfg["dyn_offset_y"] = self.ctx.dyn_offset_y

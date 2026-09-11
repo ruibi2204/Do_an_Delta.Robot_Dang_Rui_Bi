@@ -11,14 +11,14 @@ TIME_MOVE_ACTION = 0.1
 # ==== Tốc độ RIÊNG cho pha GẮP (pick_dof4): điểm A -> hạ Z -> tiến sâu gắp.
 # Mặc định lấy bằng giá trị chung ở trên để không phá vỡ hành vi cũ, nhưng
 # giờ có thể chỉnh riêng qua speed_params/GUI mà không ảnh hưởng pha thả. ====
-TIME_MOVE_FAST_PICK = 0.7
-TIME_MOVE_DOWN_PICK = 0.25
-TIME_MOVE_ACTION_PICK = 0.25
+TIME_MOVE_FAST_PICK = 0.6
+TIME_MOVE_DOWN_PICK = 0.3
+TIME_MOVE_ACTION_PICK = 0.3
 
 # ==== Tốc độ RIÊNG cho pha THẢ (place_dof4): điểm B -> hạ Z -> tiến sâu thả. ====
-TIME_MOVE_FAST_PLACE = 0.5
-TIME_MOVE_DOWN_PLACE = 0.2
-TIME_MOVE_ACTION_PLACE = 0.2
+TIME_MOVE_FAST_PLACE = 0.6
+TIME_MOVE_DOWN_PLACE = 0.3
+TIME_MOVE_ACTION_PLACE = 0.3
 
 TIME_DELAY_GRIPPER = 0.15
 TIME_DELAY_DOF4 = 0.1   # Thời gian chờ bàn xoay/step quay xong
@@ -55,7 +55,7 @@ class DeltaMotionPlanner:
 
         self.uart = uart_comm
         self.HOME = (60.0, 0.0, 300.0)
-        self.Z_SAFE = 306.0
+        self.Z_SAFE = 295.0
         self.current_pos = self.HOME  # theo dõi vị trí hiện tại để nội suy đường thẳng
 
         # Khởi tạo các tham số tốc độ dạng thuộc tính riêng của instance,
@@ -231,7 +231,7 @@ class DeltaMotionPlanner:
 
         return set_gripper
 
-    def pick_dof4(self, point_a, z_pick=306, gripper_callback=None):
+    def pick_dof4(self, point_a, z_pick=295, gripper_callback=None):
         ax, ay = point_a
         z_action_pick = z_pick + 12
         set_gripper = self._make_set_gripper(gripper_callback)
@@ -240,7 +240,7 @@ class DeltaMotionPlanner:
         try:
             # 1. Đến điểm A trên cao -> hạ Z_pick -> tiến sâu gắp
             #    (dùng bộ tốc độ RIÊNG cho pha gắp: *_PICK)
-            self._move_or_raise(ax, ay, 306, self.TIME_MOVE_FAST_PICK)
+            self._move_or_raise(ax, ay, 295, self.TIME_MOVE_FAST_PICK)
             self._move_or_raise(ax, ay, z_pick, self.TIME_MOVE_DOWN_PICK)
             self._move_or_raise(ax, ay, z_action_pick, self.TIME_MOVE_ACTION_PICK)
 
@@ -250,7 +250,7 @@ class DeltaMotionPlanner:
 
             # 2. Nhấc lên an toàn -> về Home, VẪN GIỮ vật (không xoay,
             #    không thả) - chờ lệnh place_dof4() sau khi thấy khung.
-            self._move_or_raise(ax, ay, 306, self.TIME_MOVE_DOWN_PICK)
+            self._move_or_raise(ax, ay, 295, self.TIME_MOVE_DOWN_PICK)
             self.move_home()
             print("=== ĐÃ GẮP VẬT, ĐANG GIỮ TẠI HOME - CHỜ THẤY KHUNG ===\n")
             return True
@@ -260,10 +260,10 @@ class DeltaMotionPlanner:
             self._try_safe_retreat(ax, ay)
             raise
 
-    def place_dof4(self, place_point, z_pick=306, gripper_callback=None,
+    def place_dof4(self, place_point, z_pick=295, gripper_callback=None,
                     rotate_callback=None, object_angle_deg=None, target_angle_deg=90.0):
         bx, by = place_point
-        z_action_place = z_pick + 6
+        z_action_place = z_pick + 12
         set_gripper = self._make_set_gripper(gripper_callback)
 
         rotation_needed = None
@@ -281,7 +281,7 @@ class DeltaMotionPlanner:
 
             # 2. Sang điểm thả -> hạ xuống -> nhả vật
             #    (dùng bộ tốc độ RIÊNG cho pha thả: *_PLACE)
-            self._move_or_raise(bx, by, 306, self.TIME_MOVE_FAST_PLACE)
+            self._move_or_raise(bx, by, 295, self.TIME_MOVE_FAST_PLACE)
             self._move_or_raise(bx, by, z_pick, self.TIME_MOVE_DOWN_PLACE)
             self._move_or_raise(bx, by, z_action_place, self.TIME_MOVE_ACTION_PLACE)
 
@@ -290,7 +290,7 @@ class DeltaMotionPlanner:
             time.sleep(self.TIME_DELAY_GRIPPER)
 
             # 3. Nhấc lên an toàn -> XOAY NGƯỢC LẠI để reset bậc tự do 4 -> về Home
-            self._move_or_raise(bx, by, 306, self.TIME_MOVE_DOWN_PLACE)
+            self._move_or_raise(bx, by, 295, self.TIME_MOVE_DOWN_PLACE)
             if rotation_needed is not None:
                 self._rotate_dof4(rotate_callback, -rotation_needed)
 
@@ -303,7 +303,7 @@ class DeltaMotionPlanner:
             self._try_safe_retreat(bx, by)
             raise
 
-    def pick_and_place_dof4(self, point_a, z_pick=306, gripper_callback=None,
+    def pick_and_place_dof4(self, point_a, z_pick=295, gripper_callback=None,
                              rotate_callback=None, object_angle_deg=None,
                              place_point=(0.0, 0.0), target_angle_deg=90.0):
         self.pick_dof4(point_a, z_pick=z_pick, gripper_callback=gripper_callback)
@@ -313,7 +313,7 @@ class DeltaMotionPlanner:
             target_angle_deg=target_angle_deg,
         )
 
-    def pick_and_place(self, point_a, point_b, z_pick=306, gripper_callback=None):
+    def pick_and_place(self, point_a, point_b, z_pick=295, gripper_callback=None):
         """Bản KHÔNG có bậc tự do 4 - giữ nguyên y hệt move_delta_4dof.py gốc,
         dùng khi không cần xoay (ví dụ chế độ Cameracircle.py cũ)."""
         return self.pick_and_place_dof4(

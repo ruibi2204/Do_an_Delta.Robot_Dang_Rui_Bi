@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import subprocess
 
 import numpy as np
 
@@ -32,6 +33,12 @@ from kinematics.move_delta_4dof import DeltaMotionPlanner as Dof4Planner
 # "BÀI TOÁN ĐỘNG" (DynamicRun4DofWindow) - có pick_dof4()/place_dof4() tách
 # rời để gắp trước - chờ khung - thả sau. Không tab nào khác được dùng cái này.
 from kinematics.move_run4dof import DeltaMotionPlanner as Run4DofPlanner
+# RepeatKinematicsPlanner (ctx.planner_repeat): planner RIÊNG, ĐỘC LẬP -
+# CHỈ dùng bởi tab "ĐÁNH GIÁ ĐỘ LẶP LẠI" (RepeatTestWindow), từ file
+# kinematics/repeat_kinematics.py. KHÔNG kế thừa / không dùng chung logic
+# với DeltaMotionPlanner, Dof4Planner hay Run4DofPlanner. Không tab nào
+# khác được dùng cái này.
+from kinematics.repeat_kinematics import RepeatKinematicsPlanner
 from hardware.Uart_2 import PneumaticComm, DEFAULT_BAUD as PNEU_DEFAULT_BAUD
 from vision.Cameracircle import (
     CircleTracker,
@@ -50,7 +57,12 @@ from vision.Camera_4dof import (
 if SERIAL_AVAILABLE:
     pass
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot_config.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "robot_config.json")
+# Script canh tâm bàn xoay (chấm cam giữa khung hình, tọa độ 0,0) - chạy như
+# tiến trình riêng (subprocess), KHÔNG import trực tiếp vì nó dùng cv2.imshow
+# với vòng lặp blocking riêng, không thể chạy chung luồng với Qt event loop.
+MANUAL_CAMERA_CENTER_SCRIPT = os.path.join(BASE_DIR, "vision", "camera_center_dot.py")
 
 DEFAULT_HOME = (60.0, 0.0, 330.0)
 DEFAULT_Z_SAFE = 340.0
@@ -64,6 +76,11 @@ COORD_MODE_DYNAMIC = "dynamic"
 DOF4_PLACE_POINT = (0.0, 0.0)
 DOF4_TARGET_ANGLE_DEG = 90.0
 
+# Bàn xoay: động cơ step 17 (PUL/DIR, vi bước 1/4, 800 xung/vòng), firmware
+# nhận thẳng lệnh "TURN:<rpm>" (vòng/phút, có thể âm). Đây là giới hạn RPM
+# tối đa dùng CHUNG cho mọi nơi trong GUI (ConnectionWindow,
+# DynamicRun4DofWindow...) - PHẢI khớp với TURN_MAX_RPM bên firmware Arduino
+# (Uart_2.py). Không còn khái niệm PWM 0-255 (đó là của driver L298N/DC cũ).
 TURNTABLE_MAX_RPM = 65.0
 DET_SCALE = 0.5
 
@@ -82,6 +99,29 @@ def _fmt_size_col(item):
 def _fmt_angle_col(item):
     a = item.get("angle_deg")
     return f'{float(a):.1f}' if a is not None else "-"
+
+
+def launch_manual_camera_center(camera_index=0):
+    """
+    Mở script vision/camera_center_dot.py (chấm cam giữa khung hình để canh
+    tâm bàn xoay) như một TIẾN TRÌNH RIÊNG (subprocess), không chặn giao
+    diện chính. Trả về đối tượng subprocess.Popen nếu mở thành công, None
+    nếu lỗi (ví dụ thiếu file hoặc không khởi chạy được).
+
+    LƯU Ý: chỉ 1 tiến trình có thể giữ camera cùng lúc - phải đảm bảo mọi
+    CameraThread khác đang dùng cùng camera_index đã DỪNG hẳn trước khi gọi
+    hàm này.
+    """
+    if not os.path.isfile(MANUAL_CAMERA_CENTER_SCRIPT):
+        print(f"[MANUAL CAM] Không tìm thấy file: {MANUAL_CAMERA_CENTER_SCRIPT}")
+        return None
+    try:
+        return subprocess.Popen(
+            [sys.executable, MANUAL_CAMERA_CENTER_SCRIPT, "--index", str(camera_index)]
+        )
+    except Exception as e:
+        print(f"[MANUAL CAM] Lỗi mở camera_center_dot.py: {e}")
+        return None
 
 
 # =====================================================================
@@ -106,7 +146,12 @@ def load_config():
         "csv_match_tolerance": 6.0,
         "csv_match_same_color": True,
         "csv_z_pick": 340.0,
-        "turn_pwm": 150,
+        # ĐÃ ĐỔI: "turn_pwm" (0-255, dùng cho L298N/DC cũ) -> "turn_rpm"
+        # (vòng/phút, dùng cho step 17 mới). Nếu file robot_config.json cũ
+        # trên máy còn key "turn_pwm", nó sẽ đơn giản bị bỏ qua (không dùng
+        # tới nữa) - AppContext sẽ dùng giá trị mặc định "turn_rpm" bên dưới
+        # cho tới khi người dùng lưu lại từ GUI.
+        "turn_rpm": 20.0,
         "step_test_angle": 90.0,
         "coord_mode": COORD_MODE_CIRCLE,
         "csv_apply_dof4": False,
@@ -115,6 +160,12 @@ def load_config():
         "dyn_rpm": 30.0,
         "dyn_offset_x": 0.0,
         "dyn_offset_y": 0.0,
+        "repeat_ax": 10.0,
+        "repeat_ay": 10.0,
+        "repeat_bx": -10.0,
+        "repeat_by": 10.0,
+        "repeat_count": 10,
+        "repeat_z_pick": 300.0,
     }
     if os.path.isfile(CONFIG_FILE):
         try:
@@ -412,7 +463,7 @@ def cv2_to_qpixmap(frame_bgr):
 
 def apply_light_palette(app):
     palette = QPalette()
-    bg = QColor("#f5f5f5")
+    bg = QColor("#eaf2fb")
     base = QColor("#ffffff")
     text = QColor("#1a1a1a")
     disabled_text = QColor("#888888")
@@ -436,34 +487,34 @@ def apply_light_palette(app):
 
 
 STYLE_SHEET = """
-QWidget { background-color: #f5f5f5; color: #1a1a1a; font-family: 'Segoe UI', Arial; font-size: 14pt; }
-QMainWindow { background-color: #f5f5f5; }
-QDialog { background-color: #f5f5f5; color: #1a1a1a; }
-QMessageBox { background-color: #f5f5f5; color: #1a1a1a; }
+QWidget { background-color: #eaf2fb; color: #1a1a1a; font-family: 'Segoe UI', Arial; font-size: 14pt; }
+QMainWindow { background-color: #eaf2fb; }
+QDialog { background-color: #eaf2fb; color: #1a1a1a; }
+QMessageBox { background-color: #eaf2fb; color: #1a1a1a; }
 QGroupBox { border: 2px solid #c0c0c0; border-radius: 12px; margin-top: 14px; font-weight: 700; font-size: 13pt; padding-top: 10px; color: #1a1a1a; }
 QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; }
 QPushButton { background-color: #e0e0e0; color: #1a1a1a; border-radius: 14px; border: 2px solid #b0b0b0; padding: 10px; font-weight: 700; font-size: 15pt; }
-QPushButton:hover { background-color: #d0d0d0; border-color: #0078d4; }
-QPushButton:pressed { background-color: #0078d4; color: #ffffff; }
+QPushButton:hover { background-color: #d0d0d0; border-color: #757575; }
+QPushButton:pressed { background-color: #757575; color: #ffffff; }
 QPushButton:disabled { background-color: #d0d0d0; color: #888888; border-color: #b0b0b0; }
 QPushButton#jogBtn { background-color: #e8e8e8; color: #1a1a1a; font-size: 20pt; min-height: 90px; }
 QPushButton#jogBtn:hover { background-color: #d0d0d0; }
 QPushButton#homeBtn { background-color: #d0d0d0; border-color: #b0b0b0; font-size: 16pt; min-height: 70px; }
 QPushButton#homeBtn:hover { background-color: #c0c0c0; }
-QPushButton#saveBtn { background-color: #0078d4; color: #ffffff; font-size: 15pt; min-height: 60px; }
-QPushButton#saveBtn:hover { background-color: #106ebe; }
-QPushButton#connectBtn { background-color: #0078d4; color: #ffffff; min-height: 38px; font-size: 11pt; padding: 6px; }
-QPushButton#connectBtn:hover { background-color: #106ebe; }
+QPushButton#saveBtn { background-color: #757575; color: #ffffff; font-size: 15pt; min-height: 60px; }
+QPushButton#saveBtn:hover { background-color: #616161; }
+QPushButton#connectBtn { background-color: #757575; color: #ffffff; min-height: 38px; font-size: 11pt; padding: 6px; }
+QPushButton#connectBtn:hover { background-color: #616161; }
 QPushButton#disconnectBtn { background-color: #c00000; color: #ffffff; min-height: 38px; font-size: 11pt; padding: 6px; }
 QPushButton#disconnectBtn:hover { background-color: #a00000; }
-QPushButton#actionBtn { background-color: #0078d4; color: #ffffff; min-height: 65px; font-size: 16pt; }
-QPushButton#actionBtn:hover { background-color: #106ebe; }
-QPushButton#dynStartBtn { background-color: #0a7a3a; color: #ffffff; min-height: 65px; font-size: 16pt; }
-QPushButton#dynStartBtn:hover { background-color: #0d9a4a; }
+QPushButton#actionBtn { background-color: #757575; color: #ffffff; min-height: 65px; font-size: 16pt; }
+QPushButton#actionBtn:hover { background-color: #616161; }
+QPushButton#dynStartBtn { background-color: #757575; color: #ffffff; min-height: 65px; font-size: 16pt; }
+QPushButton#dynStartBtn:hover { background-color: #616161; }
 QPushButton#dynStopBtn { background-color: #c00000; color: #ffffff; min-height: 65px; font-size: 16pt; }
 QPushButton#dynStopBtn:hover { background-color: #a00000; }
-QPushButton#deviceOnBtn { background-color: #0078d4; color: #ffffff; min-height: 36px; font-size: 11pt; padding: 4px; }
-QPushButton#deviceOnBtn:hover { background-color: #106ebe; }
+QPushButton#deviceOnBtn { background-color: #757575; color: #ffffff; min-height: 36px; font-size: 11pt; padding: 4px; }
+QPushButton#deviceOnBtn:hover { background-color: #616161; }
 QPushButton#deviceOffBtn { background-color: #c00000; color: #ffffff; min-height: 36px; font-size: 11pt; padding: 4px; }
 QPushButton#deviceOffBtn:hover { background-color: #a00000; }
 QPushButton#deviceApplyBtn { background-color: #b0b0b0; color: #1a1a1a; min-height: 32px; font-size: 10pt; padding: 4px; }
@@ -472,8 +523,8 @@ QPushButton#deviceQuickBtn { background-color: #e0e0e0; color: #1a1a1a; min-heig
 QPushButton#deviceQuickBtn:hover { background-color: #d0d0d0; border-color: #0078d4; }
 QPushButton#backBtn { background-color: #6c757d; color: #ffffff; min-height: 44px; font-size: 12pt; border-color: #5a6268; }
 QPushButton#backBtn:hover { background-color: #5a6268; }
-QPushButton#menuBtn { min-height: 80px; font-size: 17pt; background-color: #0078d4; color: #ffffff; border-color: #0a63ad; }
-QPushButton#menuBtn:hover { background-color: #106ebe; }
+QPushButton#menuBtn { min-height: 80px; font-size: 17pt; background-color: #757575; color: #ffffff; border-color: #5a6268; }
+QPushButton#menuBtn:hover { background-color: #616161; }
 QLabel#menuTitle1 { font-size: 22pt; font-weight: 900; color: #0078d4; }
 QLabel#menuTitle2 { font-size: 18pt; font-weight: 800; color: #1a1a1a; }
 QLabel#menuTitle3 { font-size: 14pt; font-weight: 700; color: #555555; }
@@ -539,6 +590,15 @@ class AppContext:
         self.planner_run4dof.HOME = tuple(self.cfg["home_position"])
         self.planner_run4dof.Z_SAFE = self.cfg["z_safe"]
 
+        # planner_repeat: planner RIÊNG, ĐỘC LẬP - CHỈ dùng bởi tab
+        # "ĐÁNH GIÁ ĐỘ LẶP LẠI" (RepeatTestWindow), từ file
+        # kinematics/repeat_kinematics.py. KHÔNG kế thừa / không dùng chung
+        # logic với planner, planner_dof4 hay planner_run4dof, và KHÔNG
+        # điều khiển gripper. Không tab nào khác được dùng cái này.
+        self.planner_repeat = RepeatKinematicsPlanner(uart_comm=self.robot_uart)
+        self.planner_repeat.HOME = tuple(self.cfg["home_position"])
+        self.planner_repeat.Z_SAFE = self.cfg["z_safe"]
+
         self.current_pos = list(self.cfg["home_position"])
         self.home_pos = list(self.cfg["home_position"])
         self.jog_step_xy = self.cfg["jog_step_xy"]
@@ -557,7 +617,13 @@ class AppContext:
 
         self.pump_state = False
         self.turn_state = False
-        self.turn_pwm_value = int(self.cfg.get("turn_pwm", 150))
+        # ĐÃ ĐỔI: turn_pwm_value (0-255, driver L298N/DC cũ) -> turn_rpm_value
+        # (vòng/phút, bàn xoay dùng step 17 mới). Kẹp trong khoảng
+        # [-TURNTABLE_MAX_RPM, TURNTABLE_MAX_RPM] để không bao giờ gửi vượt
+        # giới hạn firmware cho phép, kể cả khi robot_config.json cũ còn sót
+        # giá trị bất thường.
+        self.turn_rpm_value = float(self.cfg.get("turn_rpm", 20.0))
+        self.turn_rpm_value = max(-TURNTABLE_MAX_RPM, min(TURNTABLE_MAX_RPM, self.turn_rpm_value))
 
         self.coord_mode = self.cfg.get("coord_mode", COORD_MODE_CIRCLE)
 

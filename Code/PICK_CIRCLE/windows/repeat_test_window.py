@@ -11,9 +11,17 @@ from shared_state import BaseTabWindow, StreamToSignal, save_config
 
 
 # =====================================================================
-# WORKER - chạy vòng lặp gắp-thả A -> B trong 1 thread riêng, không làm
-# treo giao diện. Có hỗ trợ dừng "mềm" (dừng sau khi hoàn tất chu trình
-# hiện tại, không ngắt robot giữa chừng để tránh làm rơi vật / lệch vị trí).
+# WORKER - chạy vòng lặp A -> B trong 1 thread riêng, không làm treo
+# giao diện. Dùng planner_repeat (kinematics/repeat_kinematics.py) -
+# planner RIÊNG, ĐỘC LẬP với planner gắp-thả chính, KHÔNG điều khiển
+# gripper (bài test chỉ đánh giá độ lặp lại vị trí cơ khí).
+#
+# Mỗi chu kỳ (planner_repeat.repeat_cycle):
+#   Điểm A -> hạ z_pick -> +2mm -> -2mm -> về Home
+#   -> Điểm B -> hạ z_pick -> +2mm -> -2mm -> về Home
+#
+# Có hỗ trợ dừng "mềm" (dừng sau khi hoàn tất chu trình hiện tại, không
+# ngắt robot giữa chừng để tránh lệch vị trí).
 # =====================================================================
 class RepeatWorker(QThread):
     log_line = Signal(str)
@@ -38,7 +46,10 @@ class RepeatWorker(QThread):
         sys.stdout = StreamToSignal(self.log_line.emit)
         completed = 0
         try:
-            planner = self.ctx.planner
+            # planner_repeat: planner RIÊNG cho bài test độ lặp lại
+            # (kinematics/repeat_kinematics.py), KHÔNG dùng ctx.planner
+            # (planner gắp-thả chính) và KHÔNG cần gripper_callback.
+            planner = self.ctx.planner_repeat
             for i in range(1, self.repeat_count + 1):
                 if self._stop_requested:
                     self.log_line.emit(f"[DỪNG] Người dùng yêu cầu dừng trước lần {i}.")
@@ -46,11 +57,10 @@ class RepeatWorker(QThread):
 
                 self.log_line.emit(f"--- LẦN LẶP {i}/{self.repeat_count} ---")
 
-                planner.pick_and_place(
+                planner.repeat_cycle(
                     self.point_a,
                     self.point_b,
                     z_pick=self.z_pick,
-                    gripper_callback=self.ctx.gripper_callback,
                 )
 
                 completed = i
@@ -92,7 +102,7 @@ class RepeatTestWindow(BaseTabWindow):
         cfg = self.ctx.cfg
 
         # ---- Điểm A ----
-        group_a = QGroupBox("ĐIỂM A (tọa ộ 1)")
+        group_a = QGroupBox("ĐIỂM A (tọa độ 1)")
         grid_a = QGridLayout(group_a)
         self.spin_ax = self._make_spin(cfg.get("repeat_ax", 10.0))
         self.spin_ay = self._make_spin(cfg.get("repeat_ay", 10.0))
@@ -116,7 +126,7 @@ class RepeatTestWindow(BaseTabWindow):
         # ---- Tham số ----
         group_p = QGroupBox("THAM SỐ")
         grid_p = QGridLayout(group_p)
-        self.spin_zpick = self._make_spin(cfg.get("csv_z_pick", 340.0), mn=0.0, mx=500.0)
+        self.spin_zpick = self._make_spin(cfg.get("repeat_z_pick", 300.0), mn=0.0, mx=500.0)
         self.spin_repeat = QSpinBox()
         self.spin_repeat.setRange(1, 10000)
         self.spin_repeat.setValue(int(cfg.get("repeat_count", 10)))
@@ -198,6 +208,7 @@ class RepeatTestWindow(BaseTabWindow):
         self.ctx.cfg["repeat_ay"] = point_a[1]
         self.ctx.cfg["repeat_bx"] = point_b[0]
         self.ctx.cfg["repeat_by"] = point_b[1]
+        self.ctx.cfg["repeat_z_pick"] = z_pick
         self.ctx.cfg["repeat_count"] = repeat_count
         save_config(self.ctx.cfg)
 

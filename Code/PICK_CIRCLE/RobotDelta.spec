@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('delta.png', '.'), ('robot_config.json', '.'), ('point.csv', '.')],
+    datas=[('delta.png', '.'), ('robot_config.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

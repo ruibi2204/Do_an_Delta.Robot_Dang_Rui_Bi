@@ -10,8 +10,8 @@ RECT_HEIGHT_MM = 20.0
 RECT_RATIO_EXPECTED = RECT_WIDTH_MM / RECT_HEIGHT_MM
 RECT_RATIO_TOLERANCE = 0.15
 
-FRAME_HOLE_WIDTH_MM = 10
-FRAME_HOLE_HEIGHT_MM = 20
+FRAME_HOLE_WIDTH_MM = 10.5
+FRAME_HOLE_HEIGHT_MM = 20.5
 FRAME_HOLE_RATIO_EXPECTED = FRAME_HOLE_WIDTH_MM / FRAME_HOLE_HEIGHT_MM
 FRAME_HOLE_RATIO_TOLERANCE = 0.15
 FRAME_HOLE_COUNT_EXPECTED = 8
@@ -25,8 +25,8 @@ FRAME_HOLE_COUNT_EXPECTED = 8
 #   'white' -> vật thể (hình chữ nhật đỏ)
 #   'black' -> lỗ trên khung
 _CIRCLE_CALIB = {
-    'white': {'scale': 0.3118, 'intercept': 1.0},
-    'black': {'scale': 0.3125, 'intercept': 1.0},
+    'white': {'scale': 0.3, 'intercept': 1.0},
+    'black': {'scale': 0.298, 'intercept': 1.0},
 }
 
 DET_SCALE = 0.5

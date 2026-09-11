@@ -1,142 +1,21 @@
-import os
-import cv2
-import numpy as np
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QGroupBox, QDoubleSpinBox, QTextEdit, QTableWidget, QTableWidgetItem,
-    QHeaderView, QMessageBox, QSizePolicy, QAbstractItemView, QRadioButton,
-    QButtonGroup,
+    QGroupBox, QDoubleSpinBox, QTextEdit, QMessageBox, QSizePolicy,
 )
 
 from shared_state import (
-    BaseTabWindow, cv2_to_qpixmap,
-    save_config, CSV_COLUMNS, COORD_MODE_CIRCLE, COORD_MODE_DOF4,
-    _fmt_size_col, _fmt_angle_col,
-)
-
-# Import các hàm xử lý ảnh đã được sửa (có tham số roi)
-from vision.Camera_4dof import (
-    detect_frame_holes, detect_objects, undistort_image,
-    DET_SCALE, _build_red_mask,
+    BaseTabWindow, CameraThread, cv2_to_qpixmap,
+    save_config, COORD_MODE_DOF4, launch_manual_camera_center,
 )
 
 # ---------------------------------------------------------------------
 # KÍCH THƯỚC GIAO DIỆN. Gom về hằng số ở đây để dễ chỉnh lại sau này.
 # ---------------------------------------------------------------------
-VIDEO_MIN_W = 480
-VIDEO_MIN_H = 320
-TABLE_MAX_H = 260
+VIDEO_MIN_W = 900
+VIDEO_MIN_H = 640
 OFFSET_BOX_MAX_H = 92
 SPINBOX_MAX_W = 130
-
-
-# ========================== LUỒNG CAMERA TÙY CHỈNH CÓ ROI ==========================
-class CameraThreadWithROI(QThread):
-    """
-    Luồng đọc camera, xử lý ảnh và phát hiện vật/khung.
-    Tự động tính ROI (ô vuông ở giữa) cho chế độ DOF4.
-    """
-    frame_ready = Signal(object, list, float)   # frame (đã undistort), items, fps
-    error = Signal(str)
-    stopped = Signal()
-
-    def __init__(self, camera_index, calib_path, detect_mode):
-        super().__init__()
-        self.camera_index = camera_index
-        self.calib_path = calib_path
-        self.detect_mode = detect_mode
-        self._running = False
-        self._cap = None
-        self._calib_data = None
-
-    def load_calib(self):
-        try:
-            data = np.load(self.calib_path)
-            self._calib_data = (data['camera_matrix'], data['dist_coeffs'])
-        except Exception as e:
-            self.error.emit(f"Không thể load calib: {e}")
-            return False
-        return True
-
-    def run(self):
-        if not self.load_calib():
-            return
-        self._cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(self.camera_index)
-        if not self._cap.isOpened():
-            self.error.emit(f"Không thể mở camera {self.camera_index}")
-            return
-        self._cap.set(cv2.CAP_PROP_FPS, 30)
-        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._running = True
-        camera_matrix, dist_coeffs = self._calib_data
-        fps = 0.0
-        frame_count = 0
-        start_time = cv2.getTickCount()
-
-        while self._running:
-            ret, frame = self._cap.read()
-            if not ret:
-                break
-
-            # Undistort
-            undistorted, new_cm = undistort_image(frame, camera_matrix, dist_coeffs)
-            fx, fy = new_cm[0, 0], new_cm[1, 1]
-            cx, cy = new_cm[0, 2], new_cm[1, 2]
-
-            # Tính ROI: ô vuông ở giữa, kích thước = 1/3 chiều nhỏ nhất
-            h, w = undistorted.shape[:2]
-            roi_size = min(w, h) // 3
-            roi = (w//2 - roi_size//2, h//2 - roi_size//2, roi_size, roi_size)
-
-            # Chuẩn bị mask (dùng chung cho cả frame và vật)
-            small = cv2.resize(undistorted, None, fx=DET_SCALE, fy=DET_SCALE, interpolation=cv2.INTER_AREA)
-            small_min_area = max(20, int(round(150 * DET_SCALE * DET_SCALE)))
-            red_mask = _build_red_mask(small, min_component_area=small_min_area)
-            upscale = 1.0 / DET_SCALE
-
-            # Phát hiện khung (không dùng ROI)
-            frame_result = detect_frame_holes(undistorted, cx, cy, fx, fy, mask=red_mask, upscale=upscale)
-
-            # Phát hiện vật (có ROI) - chỉ áp dụng cho chế độ DOF4 (có góc quay)
-            if self.detect_mode == COORD_MODE_DOF4:
-                objects = detect_objects(
-                    undistorted, cx, cy, fx, fy,
-                    mask=red_mask,
-                    upscale=upscale,
-                    refine_frame=undistorted,
-                    roi=roi
-                )
-            else:
-                # Chế độ circle: không dùng ROI, detect vòng tròn (giả sử có hàm riêng)
-                # Ở đây tôi giả định có hàm detect_circles; nếu không, dùng objects rỗng
-                objects = []   # sẽ được thay bằng detect_circles nếu cần
-
-            # Tạo danh sách items (kết hợp khung + vật) để hiển thị trên bảng
-            items = []
-            if frame_result['frame_found']:
-                for h in frame_result['holes']:
-                    items.append(h)
-            for o in objects:
-                items.append(o)
-
-            # Tính FPS
-            frame_count += 1
-            if frame_count >= 10:
-                end_time = cv2.getTickCount()
-                seconds = (end_time - start_time) / cv2.getTickFrequency()
-                fps = frame_count / seconds if seconds > 0 else 0.0
-                frame_count = 0
-                start_time = cv2.getTickCount()
-
-            self.frame_ready.emit(undistorted, items, fps)
-
-        self._cap.release()
-        self.stopped.emit()
-
-    def stop(self):
-        self._running = False
-        self.wait()
 
 
 # ========================== CỬA SỔ CHÍNH ==========================
@@ -145,14 +24,23 @@ class CameraWindow(BaseTabWindow):
     Cửa sổ CAMERA && OFFSET TỌA ĐỘ.
 
     CHỈ dùng để:
-      1) Xem trực tiếp hình ảnh camera, kiểm tra hoạt động đã ổn định chưa,
-         và hiển thị bảng tọa độ nhận diện được - hỗ trợ cả 2 chế độ:
-           - Cameracircle.py  (vòng tròn, chỉ X/Y)
-           - Camera_4dof.py   (HCN đỏ, có thêm góc quay)
+      1) Xem trực tiếp hình ảnh camera (chế độ Camera_4dof.py - HCN đỏ
+         10x20mm, có góc quay) để kiểm tra hoạt động đã ổn định chưa. Tâm
+         khung hình (0,0) được đánh dấu CÙNG STYLE với chế độ MANUAL (chấm
+         cam + nhãn) để dễ đối chiếu.
       2) Chỉnh offset (bù trừ) tọa độ camera theo X/Y (mm).
+      3) Mở chế độ MANUAL (vision/camera_center_dot.py) - chấm cam giữa
+         khung hình đánh dấu tọa độ (0,0), dùng để canh tâm bàn xoay bằng
+         mắt trước khi chạy tự động. Nút này nằm ở cột phải, bấm là chuyển
+         thẳng sang cửa sổ MANUAL ngay (không hỏi lại).
 
-    Không còn chu trình gắp-thả tự động ở đây nữa: cửa sổ này chỉ thu thập
-    tọa độ để dùng cho giao diện BÀI TOÁN TĨNH (CsvWindow) như trước.
+    Dùng CHUNG lớp CameraThread trong shared_state.py (không tự định nghĩa
+    luồng camera riêng) để tránh trùng lặp code với các cửa sổ khác. Chỉ
+    hỗ trợ chế độ DOF4 ở đây.
+
+    Không còn bảng tọa độ / chu trình gắp-thả tự động ở đây nữa - cửa sổ
+    này chỉ để xem hình + canh offset; tọa độ nhận diện vẫn được lưu vào
+    ctx.latest_circles để giao diện BÀI TOÁN TĨNH (CsvWindow) dùng như cũ.
     """
 
     def __init__(self, ctx, launcher):
@@ -165,7 +53,7 @@ class CameraWindow(BaseTabWindow):
         root = QHBoxLayout(self.content_widget)
         root.setSpacing(10)
 
-        # ---------------- Cột trái: video + chế độ + bảng tọa độ ----------------
+        # ---------------- Cột trái: video (phóng to) ----------------
         video_col = QVBoxLayout()
         video_col.setSpacing(6)
 
@@ -176,7 +64,7 @@ class CameraWindow(BaseTabWindow):
             "background-color:#ffffff; border:2px solid #c0c0c0; border-radius:10px; color:#888888;"
         )
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        video_col.addWidget(self.video_label, 5)
+        video_col.addWidget(self.video_label, 1)
 
         cam_ctrl_row = QHBoxLayout()
         cam_ctrl_row.setSpacing(6)
@@ -194,47 +82,26 @@ class CameraWindow(BaseTabWindow):
         cam_ctrl_row.addWidget(self.lbl_fps)
         video_col.addLayout(cam_ctrl_row)
 
-        mode_box = QGroupBox("PHƯƠNG THỨC XÁC ĐỊNH TỌA ĐỘ")
-        mode_box.setObjectName("compactBox")
-        mode_layout = QVBoxLayout()
-        mode_layout.setSpacing(2)
+        self.lbl_mode_note = QLabel(
+            "Chế độ nhận diện: Camera_4dof.py - HCN đỏ 10x20mm, có góc quay."
+        )
+        self.lbl_mode_note.setWordWrap(True)
+        self.lbl_mode_note.setStyleSheet("color:#555555; font-size:9pt;")
+        video_col.addWidget(self.lbl_mode_note)
 
-        self.radio_mode_circle = QRadioButton("① Vòng tròn (Cameracircle.py - chỉ X/Y)")
-        self.radio_mode_dof4 = QRadioButton("② Bậc tự do 4 (Camera_4dof.py - HCN đỏ 10x20mm, có góc)")
-        self.radio_group_mode = QButtonGroup(self)
-        self.radio_group_mode.addButton(self.radio_mode_circle, 0)
-        self.radio_group_mode.addButton(self.radio_mode_dof4, 1)
-
-        if self.ctx.coord_mode == COORD_MODE_DOF4:
-            self.radio_mode_dof4.setChecked(True)
-        else:
-            self.radio_mode_circle.setChecked(True)
-
-        self.radio_mode_circle.toggled.connect(self._on_coord_mode_changed)
-
-        mode_layout.addWidget(self.radio_mode_circle)
-        mode_layout.addWidget(self.radio_mode_dof4)
-        self.lbl_coord_mode_note = QLabel(self._coord_mode_note_text())
-        self.lbl_coord_mode_note.setWordWrap(True)
-        self.lbl_coord_mode_note.setStyleSheet("color:#555555; font-size:8pt;")
-        mode_layout.addWidget(self.lbl_coord_mode_note)
-
-        mode_box.setLayout(mode_layout)
-        video_col.addWidget(mode_box)
-
-        self.circle_table = QTableWidget(0, len(CSV_COLUMNS))
-        self.circle_table.setHorizontalHeaderLabels(CSV_COLUMNS)
-        self.circle_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.circle_table.setMaximumHeight(TABLE_MAX_H)
-        self.circle_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.circle_table.setStyleSheet("font-size:9pt;")
-        self.circle_table.verticalHeader().setDefaultSectionSize(20)
-        video_col.addWidget(self.circle_table, 3)
-
-        # ---------------- Cột phải: chỉ còn OFFSET + log camera ----------------
+        # ---------------- Cột phải: MANUAL + OFFSET + log camera ----------------
         ctrl_col = QVBoxLayout()
         ctrl_col.setAlignment(Qt.AlignTop)
         ctrl_col.setSpacing(6)
+
+        self.btn_manual = QPushButton("🎯  CHẾ ĐỘ MANUAL\n(canh tâm bàn xoay)")
+        self.btn_manual.setObjectName("actionBtn")
+        self.btn_manual.setToolTip(
+            "Dừng camera ở cửa sổ này (nếu đang chạy) rồi mở ngay vision/camera_center_dot.py\n"
+            "ở cửa sổ riêng - hiển thị chấm cam đánh dấu tọa độ (0,0) để canh tâm bàn xoay."
+        )
+        self.btn_manual.clicked.connect(self.on_open_manual)
+        ctrl_col.addWidget(self.btn_manual)
 
         offset_box = QGroupBox("OFFSET CAMERA (mm)")
         offset_box.setObjectName("compactBox")
@@ -269,9 +136,8 @@ class CameraWindow(BaseTabWindow):
         ctrl_col.addWidget(offset_box)
 
         note = QLabel(
-            "Tọa độ hiển thị trong bảng bên trái dùng để nhập cho giao diện\n"
-            "BÀI TOÁN TĨNH. Offset ở trên chỉ bù trừ sai lệch giữa gốc tọa độ\n"
-            "camera và gốc tọa độ thực tế của robot."
+            "Offset ở trên chỉ bù trừ sai lệch giữa gốc tọa độ camera và\n"
+            "gốc tọa độ thực tế của robot."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color:#555555; font-size:9pt;")
@@ -282,19 +148,8 @@ class CameraWindow(BaseTabWindow):
         self.log_box.setStyleSheet("font-size:9pt;")
         ctrl_col.addWidget(self.log_box, 1)
 
-        root.addLayout(video_col, 3)
-        root.addLayout(ctrl_col, 2)
-
-    def _coord_mode_note_text(self):
-        if self.ctx.coord_mode == COORD_MODE_CIRCLE:
-            return "Đang dùng: Cameracircle.py (chỉ xác định X/Y)."
-        return "Đang dùng: Camera_4dof.py - nhận diện HCN ĐỎ 10x20mm, có góc quay."
-
-    def _on_coord_mode_changed(self, circle_checked):
-        self.ctx.coord_mode = COORD_MODE_CIRCLE if circle_checked else COORD_MODE_DOF4
-        self.ctx.cfg["coord_mode"] = self.ctx.coord_mode
-        save_config(self.ctx.cfg)
-        self.lbl_coord_mode_note.setText(self._coord_mode_note_text())
+        root.addLayout(video_col, 4)
+        root.addLayout(ctrl_col, 1)
 
     def _on_offset_x_changed(self, val):
         self.ctx.offset_x = val
@@ -315,11 +170,12 @@ class CameraWindow(BaseTabWindow):
             QMessageBox.warning(self, "Đang chạy tab khác",
                                  "Tab BÀI TOÁN ĐỘNG đang dùng camera - hãy bấm STOP ở tab đó trước.")
             return
-        # Tạo luồng mới
-        self._camera_thread = CameraThreadWithROI(
+        # Luôn dùng chế độ DOF4 ở cửa sổ này. KHÔNG đổi ctx.coord_mode ở đây
+        # để không ảnh hưởng lựa chọn chế độ của các tab khác.
+        self._camera_thread = CameraThread(
             camera_index=self.ctx.cfg.get("camera_index", 0),
             calib_path=self.ctx.cfg.get("calib_file"),
-            detect_mode=self.ctx.coord_mode,
+            detect_mode=COORD_MODE_DOF4,
         )
         self._camera_thread.frame_ready.connect(self._on_frame)
         self._camera_thread.error.connect(self._on_camera_error)
@@ -334,6 +190,19 @@ class CameraWindow(BaseTabWindow):
             self._camera_thread.stop()
             self._camera_thread = None
 
+    def _stop_camera_and_wait(self):
+        """Dừng camera thread ở cửa sổ này VÀ CHỜ đến khi thật sự giải
+        phóng camera - dùng trước khi mở chế độ MANUAL để tránh 2 tiến
+        trình cùng giữ 1 camera."""
+        if self._camera_thread is None:
+            return
+        self._camera_thread.stop()
+        self._camera_thread.wait(3000)
+        self._camera_thread = None
+        self.btn_cam_start.setEnabled(True)
+        self.btn_cam_stop.setEnabled(False)
+        self.video_label.setText("Camera đã dừng")
+
     def _on_camera_stopped(self):
         self._camera_thread = None
         self.btn_cam_start.setEnabled(True)
@@ -345,11 +214,26 @@ class CameraWindow(BaseTabWindow):
         self.log_box.append(f"⚠ LỖI CAMERA: {msg}")
         QMessageBox.warning(self, "Lỗi Camera", msg)
 
-    def _frame_counter(self):
-        if not hasattr(self, "_fc"):
-            self._fc = 0
-        self._fc += 1
-        return self._fc
+    # ==================== CHẾ ĐỘ MANUAL ====================
+    def on_open_manual(self):
+        if self.ctx.dynamic_camera_thread is not None:
+            QMessageBox.warning(self, "Đang chạy tab khác",
+                                 "Tab BÀI TOÁN ĐỘNG đang dùng camera - hãy bấm STOP ở tab đó trước.")
+            return
+
+        # Bấm là chuyển thẳng sang MANUAL ngay: tự dừng camera ở đây (nếu
+        # đang chạy) rồi mở cửa sổ MANUAL luôn, không hỏi lại.
+        self._stop_camera_and_wait()
+
+        proc = launch_manual_camera_center(self.ctx.cfg.get("camera_index", 0))
+        if proc is None:
+            QMessageBox.warning(
+                self, "Lỗi mở MANUAL",
+                "Không mở được vision/camera_center_dot.py.\n"
+                "Kiểm tra file có tồn tại và đã cài opencv-python chưa."
+            )
+            return
+        self.log_box.append("Đã chuyển sang chế độ MANUAL (canh tâm bàn xoay).")
 
     def _on_frame(self, frame, items, fps):
         self.ctx.latest_circles = items
@@ -359,12 +243,3 @@ class CameraWindow(BaseTabWindow):
                        Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
         self.lbl_fps.setText(f"FPS: {fps:.1f}")
-
-        if self._frame_counter() % 3 == 0:
-            self.circle_table.setRowCount(len(items))
-            for i, c in enumerate(items):
-                self.circle_table.setItem(i, 0, QTableWidgetItem(str(c.get("type", ""))))
-                self.circle_table.setItem(i, 1, QTableWidgetItem(_fmt_size_col(c)))
-                self.circle_table.setItem(i, 2, QTableWidgetItem(f'{c["x_mm"]:.2f}'))
-                self.circle_table.setItem(i, 3, QTableWidgetItem(f'{c["y_mm"]:.2f}'))
-                self.circle_table.setItem(i, 4, QTableWidgetItem(_fmt_angle_col(c)))

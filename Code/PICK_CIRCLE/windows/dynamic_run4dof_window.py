@@ -250,7 +250,9 @@ class DynamicRun4DofWindow(BaseTabWindow):
         recal_box.setLayout(recal_layout)
         ctrl_col.addWidget(recal_box)
 
-        turn_box = QGroupBox(f"BÀN XOAY (động cơ {TURNTABLE_MAX_RPM:.0f} v/p @ PWM=255)")
+        # ---- BÀN XOAY: step 17 (PUL/DIR). Firmware nhận thẳng TURN:<rpm>,
+        # KHÔNG còn quy đổi qua PWM 0-255 (đó là của driver L298N/DC cũ). ----
+        turn_box = QGroupBox(f"BÀN XOAY (động cơ tối đa {TURNTABLE_MAX_RPM:.0f} v/p)")
         turn_box.setObjectName("compactBox")
         turn_layout = QVBoxLayout()
         turn_layout.setSpacing(6)
@@ -264,10 +266,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.spin_rpm.valueChanged.connect(self._on_rpm_changed)
         rpm_row.addWidget(self.spin_rpm, 1)
         turn_layout.addLayout(rpm_row)
-
-        self.lbl_pwm = QLabel(self._compute_pwm_text(self.spin_rpm.value()))
-        self.lbl_pwm.setStyleSheet("color:#0078d4; font-weight:800; font-size:11pt;")
-        turn_layout.addWidget(self.lbl_pwm)
 
         onoff_row = QHBoxLayout()
         self.lbl_turn_state = QLabel("● Đang TẮT")
@@ -321,18 +319,11 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self._refresh_recal_progress_label()
 
     # ---------------- Bàn xoay ----------------
-    def _compute_pwm_text(self, rpm):
-        return f"→ PWM = {self._rpm_to_pwm(rpm)} / 255"
-
-    @staticmethod
-    def _rpm_to_pwm(rpm):
-        rpm = max(0.0, min(TURNTABLE_MAX_RPM, float(rpm)))
-        return int(round(rpm / TURNTABLE_MAX_RPM * 255))
-
+    # Gửi thẳng RPM tới firmware - KHÔNG còn quy đổi ra PWM (bàn xoay đã
+    # đổi từ động cơ DC qua L298N sang step 17 chạy runSpeed() theo RPM).
     def _on_rpm_changed(self, val):
         self.ctx.cfg["run4dof_rpm"] = val
         save_config(self.ctx.cfg)
-        self.lbl_pwm.setText(self._compute_pwm_text(val))
 
     def on_turn_on(self):
         if not self.ctx.pneu_uart.is_connected:
@@ -341,10 +332,10 @@ class DynamicRun4DofWindow(BaseTabWindow):
                 "Hãy kết nối UART 2 (thiết bị phụ) ở tab KẾT NỐI trước."
             )
             return
-        pwm = self._rpm_to_pwm(self.spin_rpm.value())
-        if self.ctx.pneu_uart.turn_set_speed(pwm):
+        rpm = self.spin_rpm.value()
+        if self.ctx.pneu_uart.turn_set_speed(rpm):
             self.ctx.turn_state = True
-            self._append_log(f"↻ Bàn xoay BẬT: {self.spin_rpm.value():.1f} v/p -> PWM={pwm}")
+            self._append_log(f"↻ Bàn xoay BẬT: {rpm:.1f} v/p")
             self._refresh_turn_label()
 
     def on_turn_off(self):
@@ -773,7 +764,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
             QTimer.singleShot(300, self._wait_then_home)
             return
         self._append_log("↻ Đang về HOME vật lý (chạm công tắc hành trình) và chờ READY...")
-        worker = FnWorker(home_and_wait, self.ctx.robot_uart, timeout=20.0)
+        worker = FnWorker(home_and_wait, self.ctx.robot_uart, timeout=10.0)
         worker.done_ok.connect(self._on_stop_home_done)
         worker.done_err.connect(self._on_start_error)
         self._track_worker(worker)

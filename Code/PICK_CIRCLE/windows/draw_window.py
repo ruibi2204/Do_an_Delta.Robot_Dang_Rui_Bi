@@ -94,16 +94,28 @@ class DrawWindow(BaseTabWindow):
         self.circle_box.setLayout(circle_grid)
         left_col.addWidget(self.circle_box)
 
-        # ---------------- Tốc độ vẽ (dùng chung 2 hình) ----------------
+        # ---------------- Tốc độ vẽ + Hạ thêm (dùng chung 2 hình) ----------------
         speed_box = QGroupBox("TỐC ĐỘ VẼ")
         speed_box.setObjectName("compactBox")
-        speed_layout = QHBoxLayout()
-        speed_layout.addWidget(QLabel("Tốc độ:"))
+        speed_grid = QGridLayout()
+        speed_grid.setSpacing(6)
+        speed_grid.setColumnMinimumWidth(0, 60)
+
         self.spin_speed = self._make_spin(1, 300, 30.0)
-        speed_layout.addWidget(self.spin_speed)
-        speed_layout.addWidget(QLabel("mm/s"))
-        speed_layout.addStretch()
-        speed_box.setLayout(speed_layout)
+        speed_grid.addWidget(QLabel("Tốc độ:"), 0, 0)
+        speed_grid.addWidget(self.spin_speed, 0, 1)
+        speed_grid.addWidget(QLabel("mm/s"), 0, 2)
+
+        self.spin_dip = self._make_spin(0, 50, 2.0)
+        self.spin_dip.setToolTip(
+            "Sau khi hạ tới Z vẽ (Z pick), robot sẽ hạ thêm đoạn này (mm) "
+            "trước khi bắt đầu vẽ, giúp đầu vẽ/bút chạm mặt chắc chắn hơn."
+        )
+        speed_grid.addWidget(QLabel("Hạ thêm:"), 1, 0)
+        speed_grid.addWidget(self.spin_dip, 1, 1)
+        speed_grid.addWidget(QLabel("mm"), 1, 2)
+
+        speed_box.setLayout(speed_grid)
         left_col.addWidget(speed_box)
 
         left_col.addStretch()
@@ -161,6 +173,7 @@ class DrawWindow(BaseTabWindow):
             return
 
         is_line = self.radio_line.isChecked()
+        dip = self.spin_dip.value()
 
         if is_line:
             x1 = self.spin_line_x1.value(); y1 = self.spin_line_y1.value()
@@ -169,12 +182,13 @@ class DrawWindow(BaseTabWindow):
             speed = self.spin_speed.value()
             self.log_box.append(
                 f"=== Bắt đầu vẽ ĐƯỜNG THẲNG ({x1:.1f},{y1:.1f}) -> "
-                f"({x2:.1f},{y2:.1f}), Z={z:.1f}, tốc độ={speed:.1f} mm/s ==="
+                f"({x2:.1f},{y2:.1f}), Z pick={z:.1f}, hạ thêm={dip:.1f} mm, "
+                f"tốc độ={speed:.1f} mm/s ==="
             )
 
             def task():
                 with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log_threadsafe(s))):
-                    return self.draw_motion.draw_line(x1, y1, x2, y2, z, speed)
+                    return self.draw_motion.draw_line(x1, y1, x2, y2, z, speed, dip=dip)
         else:
             cx = self.spin_circle_cx.value(); cy = self.spin_circle_cy.value()
             r = self.spin_circle_r.value()
@@ -182,12 +196,12 @@ class DrawWindow(BaseTabWindow):
             speed = self.spin_speed.value()
             self.log_box.append(
                 f"=== Bắt đầu vẽ HÌNH TRÒN tâm ({cx:.1f},{cy:.1f}), R={r:.1f}, "
-                f"Z={z:.1f}, tốc độ={speed:.1f} mm/s ==="
+                f"Z pick={z:.1f}, hạ thêm={dip:.1f} mm, tốc độ={speed:.1f} mm/s ==="
             )
 
             def task():
                 with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log_threadsafe(s))):
-                    return self.draw_motion.draw_circle(cx, cy, r, z, speed)
+                    return self.draw_motion.draw_circle(cx, cy, r, z, speed, dip=dip)
 
         self.ctx.busy = True
         self._set_busy_ui(True)
