@@ -9,6 +9,14 @@ from shared_state import (
     save_config, COORD_MODE_DOF4, launch_manual_camera_center,
 )
 
+# THÊM MỚI: toàn bộ phần "phát hiện vòng tròn đỏ + tính tọa độ mm" đã
+# được TÁCH RIÊNG ra file vision/red_circle_vision.py (không dùng Qt,
+# không phụ thuộc shared_state.py hay vision/Cameracircle.py). File
+# camera_tab.py này CHỈ còn code giao diện (Qt) - không còn xử lý ảnh
+# (OpenCV) trực tiếp ở đây nữa, chỉ gọi sang RedCircleVision để lấy kết
+# quả (tọa độ) và khung hình đã được vẽ chú thích sẵn.
+from vision.red_circle_vision import RedCircleVision
+
 # ---------------------------------------------------------------------
 # KÍCH THƯỚC GIAO DIỆN. Gom về hằng số ở đây để dễ chỉnh lại sau này.
 # ---------------------------------------------------------------------
@@ -26,13 +34,24 @@ class CameraWindow(BaseTabWindow):
     CHỈ dùng để:
       1) Xem trực tiếp hình ảnh camera (chế độ Camera_4dof.py - HCN đỏ
          10x20mm, có góc quay) để kiểm tra hoạt động đã ổn định chưa. Tâm
-         khung hình (0,0) được đánh dấu CÙNG STYLE với chế độ MANUAL (chấm
+         khung hình (0,0) được đánh dấu CÙNG STYLE với chế độ THỦ CÔNG (chấm
          cam + nhãn) để dễ đối chiếu.
       2) Chỉnh offset (bù trừ) tọa độ camera theo X/Y (mm).
-      3) Mở chế độ MANUAL (vision/camera_center_dot.py) - chấm cam giữa
+      3) Mở chế độ THỦ CÔNG (vision/red_circle_vision.py) - chấm cam giữa
          khung hình đánh dấu tọa độ (0,0), dùng để canh tâm bàn xoay bằng
          mắt trước khi chạy tự động. Nút này nằm ở cột phải, bấm là chuyển
-         thẳng sang cửa sổ MANUAL ngay (không hỏi lại).
+         THẲNG sang cửa sổ THỦ CÔNG ngay (không hỏi lại, không cần tự tay
+         chuyển cửa sổ - CameraWindow tự ẩn đi ngay khi THỦ CÔNG khởi chạy
+         thành công).
+      4) [MỚI] Phát hiện vòng tròn ĐỎ đường kính thật 30mm ngay trên cùng
+         khung hình đang xem, và hiển thị tọa độ (X, Y) tính bằng mm -
+         vừa vẽ trực tiếp lên khung hình video, vừa hiển thị ở 1 nhãn
+         riêng trong cột điều khiển bên phải. Toàn bộ phần TÍNH TOÁN nằm
+         trong vision/red_circle_vision.py (file riêng, xem module đó để
+         biết chi tiết thuật toán + công thức hiệu chuẩn) - CameraWindow
+         chỉ gọi sang và hiển thị kết quả. Tọa độ trả về đã CỘNG SẴN Offset
+         Camera (X/Y) đang chỉnh ở cột phải (ctx.offset_x/ctx.offset_y).
+         Không liên quan gì tới điều khiển robot.
 
     Dùng CHUNG lớp CameraThread trong shared_state.py (không tự định nghĩa
     luồng camera riêng) để tránh trùng lặp code với các cửa sổ khác. Chỉ
@@ -46,6 +65,10 @@ class CameraWindow(BaseTabWindow):
     def __init__(self, ctx, launcher):
         super().__init__(ctx, launcher, "📷 CAMERA && OFFSET TỌA ĐỘ")
         self._camera_thread = None
+        # [MỚI] đối tượng xử lý vision cho vòng tròn đỏ - xem
+        # vision/red_circle_vision.py. reset() được gọi lại mỗi lần bật
+        # camera (xem on_start_camera).
+        self._circle_vision = RedCircleVision()
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -68,10 +91,10 @@ class CameraWindow(BaseTabWindow):
 
         cam_ctrl_row = QHBoxLayout()
         cam_ctrl_row.setSpacing(6)
-        self.btn_cam_start = QPushButton("▶  BẮT ĐẦU CAMERA")
+        self.btn_cam_start = QPushButton("▶  BẬT CAMERA")
         self.btn_cam_start.setObjectName("connectBtn")
         self.btn_cam_start.clicked.connect(self.on_start_camera)
-        self.btn_cam_stop = QPushButton("■  DỪNG CAMERA")
+        self.btn_cam_stop = QPushButton("■  TẮT CAMERA")
         self.btn_cam_stop.setObjectName("disconnectBtn")
         self.btn_cam_stop.clicked.connect(self.on_stop_camera)
         self.btn_cam_stop.setEnabled(False)
@@ -89,21 +112,22 @@ class CameraWindow(BaseTabWindow):
         self.lbl_mode_note.setStyleSheet("color:#555555; font-size:9pt;")
         video_col.addWidget(self.lbl_mode_note)
 
-        # ---------------- Cột phải: MANUAL + OFFSET + log camera ----------------
+        # ---------------- Cột phải: THỦ CÔNG + OFFSET + log camera ----------------
         ctrl_col = QVBoxLayout()
         ctrl_col.setAlignment(Qt.AlignTop)
         ctrl_col.setSpacing(6)
 
-        self.btn_manual = QPushButton("🎯  CHẾ ĐỘ MANUAL\n(canh tâm bàn xoay)")
+        self.btn_manual = QPushButton("THỦ CÔNG")
         self.btn_manual.setObjectName("actionBtn")
         self.btn_manual.setToolTip(
-            "Dừng camera ở cửa sổ này (nếu đang chạy) rồi mở ngay vision/camera_center_dot.py\n"
-            "ở cửa sổ riêng - hiển thị chấm cam đánh dấu tọa độ (0,0) để canh tâm bàn xoay."
+            "Dừng camera ở cửa sổ này (nếu đang chạy) rồi mở ngay vision/red_circle_vision.py\n"
+            "ở cửa sổ riêng - hiển thị chấm cam đánh dấu tọa độ (0,0) để canh tâm bàn xoay.\n"
+            "Cửa sổ CAMERA này sẽ tự ẩn đi để chuyển thẳng sang chế độ THỦ CÔNG."
         )
         self.btn_manual.clicked.connect(self.on_open_manual)
         ctrl_col.addWidget(self.btn_manual)
 
-        offset_box = QGroupBox("OFFSET CAMERA (mm)")
+        offset_box = QGroupBox("BÙ TRỪ CAMERA (mm)")
         offset_box.setObjectName("compactBox")
         offset_box.setMaximumHeight(OFFSET_BOX_MAX_H)
         offset_box.setStyleSheet(
@@ -143,6 +167,20 @@ class CameraWindow(BaseTabWindow):
         note.setStyleSheet("color:#555555; font-size:9pt;")
         ctrl_col.addWidget(note)
 
+        # ---------------- [MỚI] Tọa độ vòng tròn đỏ Ø30mm ----------------
+        circle_box = QGroupBox("Vòng tròn đỏ Ø30mm")
+        circle_box.setObjectName("compactBox")
+        circle_layout = QVBoxLayout()
+        circle_layout.setContentsMargins(10, 4, 10, 6)
+        self.lbl_circle_coord = QLabel("Chưa phát hiện")
+        self.lbl_circle_coord.setStyleSheet(
+            "color:#c00000; font-weight:800; font-size:13pt;"
+        )
+        self.lbl_circle_coord.setWordWrap(True)
+        circle_layout.addWidget(self.lbl_circle_coord)
+        circle_box.setLayout(circle_layout)
+        ctrl_col.addWidget(circle_box)
+
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setStyleSheet("font-size:9pt;")
@@ -170,6 +208,13 @@ class CameraWindow(BaseTabWindow):
             QMessageBox.warning(self, "Đang chạy tab khác",
                                  "Tab BÀI TOÁN ĐỘNG đang dùng camera - hãy bấm STOP ở tab đó trước.")
             return
+
+        # [MỚI] reset trạng thái vision (tracker + đọc lại calib) mỗi lần
+        # bật camera - xem vision/red_circle_vision.py.
+        err = self._circle_vision.reset(self.ctx.cfg.get("calib_file"))
+        if err:
+            self.log_box.append(f"⚠ {err}")
+
         # Luôn dùng chế độ DOF4 ở cửa sổ này. KHÔNG đổi ctx.coord_mode ở đây
         # để không ảnh hưởng lựa chọn chế độ của các tab khác.
         self._camera_thread = CameraThread(
@@ -192,7 +237,7 @@ class CameraWindow(BaseTabWindow):
 
     def _stop_camera_and_wait(self):
         """Dừng camera thread ở cửa sổ này VÀ CHỜ đến khi thật sự giải
-        phóng camera - dùng trước khi mở chế độ MANUAL để tránh 2 tiến
+        phóng camera - dùng trước khi mở chế độ THỦ CÔNG để tránh 2 tiến
         trình cùng giữ 1 camera."""
         if self._camera_thread is None:
             return
@@ -214,29 +259,67 @@ class CameraWindow(BaseTabWindow):
         self.log_box.append(f"⚠ LỖI CAMERA: {msg}")
         QMessageBox.warning(self, "Lỗi Camera", msg)
 
-    # ==================== CHẾ ĐỘ MANUAL ====================
+    # ==================== CHẾ ĐỘ THỦ CÔNG ====================
     def on_open_manual(self):
         if self.ctx.dynamic_camera_thread is not None:
             QMessageBox.warning(self, "Đang chạy tab khác",
                                  "Tab BÀI TOÁN ĐỘNG đang dùng camera - hãy bấm STOP ở tab đó trước.")
             return
 
-        # Bấm là chuyển thẳng sang MANUAL ngay: tự dừng camera ở đây (nếu
-        # đang chạy) rồi mở cửa sổ MANUAL luôn, không hỏi lại.
+        # Bấm là chuyển thẳng sang chế độ THỦ CÔNG ngay: tự dừng camera ở
+        # đây (nếu đang chạy) rồi mở cửa sổ THỦ CÔNG luôn, không hỏi lại.
         self._stop_camera_and_wait()
 
         proc = launch_manual_camera_center(self.ctx.cfg.get("camera_index", 0))
         if proc is None:
             QMessageBox.warning(
-                self, "Lỗi mở MANUAL",
-                "Không mở được vision/camera_center_dot.py.\n"
+                self, "Lỗi mở chế độ THỦ CÔNG",
+                "Không mở được vision/red_circle_vision.py.\n"
                 "Kiểm tra file có tồn tại và đã cài opencv-python chưa."
             )
             return
-        self.log_box.append("Đã chuyển sang chế độ MANUAL (canh tâm bàn xoay).")
+
+        self.log_box.append("Đã chuyển sang chế độ THỦ CÔNG (canh tâm bàn xoay).")
+
+        # ==================================================================
+        # THÊM MỚI: tự động ẩn cửa sổ CAMERA này đi ngay sau khi chế độ
+        # THỦ CÔNG khởi chạy thành công, để người dùng KHÔNG cần tự bấm
+        # chuyển cửa sổ - THỦ CÔNG (cv2.imshow, tiến trình riêng) sẽ là
+        # thứ hiển thị ngay sau khi bấm nút, thay vì vẫn đứng ở màn CAMERA
+        # && OFFSET.
+        #
+        # LƯU Ý: vision/red_circle_vision.py chạy như TIẾN TRÌNH RIÊNG
+        # (subprocess, xem launch_manual_camera_center() trong
+        # shared_state.py) - đây KHÔNG phải cửa sổ Qt của app này nên
+        # không thể setFocus()/raise_() trực tiếp từ đây. go_back() chỉ
+        # đảm bảo CameraWindow (Qt) không còn che phía trước; cửa sổ
+        # cv2.imshow mới tạo thường tự nổi lên foreground (hành vi mặc
+        # định của hệ điều hành khi 1 tiến trình mới tạo cửa sổ).
+        # ==================================================================
+        self.go_back()
 
     def _on_frame(self, frame, items, fps):
         self.ctx.latest_circles = items
+
+        # [MỚI] Gọi sang vision/red_circle_vision.py để phát hiện vòng
+        # tròn đỏ Ø30mm + tính tọa độ (đã cộng sẵn offset giao diện) - hàm
+        # này VẼ LUÔN chú thích lên `frame`. CameraWindow chỉ hiển thị kết
+        # quả, không tự xử lý ảnh.
+        coords = self._circle_vision.process_frame(
+            frame, offset_x=self.ctx.offset_x, offset_y=self.ctx.offset_y,
+        )
+        if coords is not None:
+            x_mm, y_mm = coords
+            self.lbl_circle_coord.setText(f"X = {x_mm:.1f} mm\nY = {y_mm:.1f} mm")
+            self.lbl_circle_coord.setStyleSheet(
+                "color:#0a7a3a; font-weight:800; font-size:13pt;"
+            )
+        else:
+            self.lbl_circle_coord.setText("Chưa phát hiện")
+            self.lbl_circle_coord.setStyleSheet(
+                "color:#c00000; font-weight:800; font-size:13pt;"
+            )
+
         pix = cv2_to_qpixmap(frame)
         self.video_label.setPixmap(
             pix.scaled(self.video_label.width(), self.video_label.height(),

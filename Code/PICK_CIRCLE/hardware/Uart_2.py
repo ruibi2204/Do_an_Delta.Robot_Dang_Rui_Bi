@@ -41,7 +41,7 @@ except ImportError:
 
 DEFAULT_PORT = "COM3"
 DEFAULT_BAUD = 115200
-TURN_MAX_RPM = 60.0   # phải khớp với TURN_MAX_RPM bên firmware Arduino
+TURN_MAX_RPM = 50.0   # phải khớp với TURN_MAX_RPM bên firmware Arduino
 
 
 class PneumaticComm:

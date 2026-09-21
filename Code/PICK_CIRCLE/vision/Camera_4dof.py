@@ -25,8 +25,8 @@ FRAME_HOLE_COUNT_EXPECTED = 8
 #   'white' -> vật thể (hình chữ nhật đỏ)
 #   'black' -> lỗ trên khung
 _CIRCLE_CALIB = {
-    'white': {'scale': 0.3, 'intercept': 1.0},
-    'black': {'scale': 0.298, 'intercept': 1.0},
+    'white': {'scale': 0.295, 'intercept': 1.0},
+    'black': {'scale': 0.305, 'intercept': 1.0},
 }
 
 DET_SCALE = 0.5
@@ -35,8 +35,8 @@ DET_SCALE = 0.5
 # tung camera/driver (thuong 0-255, co camera dung -1.0..1.0), nen coi
 # day la gia tri khoi tao, roi chinh truc tiep bang phim '+'/'-' khi
 # dang chay run_live_display de tim gia tri phu hop voi camera cua ban.
-CAMERA_BRIGHTNESS_DEFAULT = 50
-CAMERA_BRIGHTNESS_STEP = 10
+CAMERA_BRIGHTNESS_DEFAULT = 30
+CAMERA_BRIGHTNESS_STEP = 15
 
 
 def _wrap_angle_180(angle_deg):
@@ -432,7 +432,7 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs, brightness=CAMERA
 
         # --- Xác định ROI (ô vuông cố định) ---
         h, w = undistorted.shape[:2]
-        roi_size = min(w, h) // 3          # kích thước ô vuông = 1/3 chiều nhỏ nhất
+        roi_size = int(min(w, h) * 2 / 3)  # kích thước ô vuông, tăng thêm so với 5/9 trước đó
         roi = (w//2 - roi_size//2, h//2 - roi_size//2, roi_size, roi_size)
         # ------------------------------------
 

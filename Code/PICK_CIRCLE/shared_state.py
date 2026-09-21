@@ -62,7 +62,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "robot_config.json")
 # Script canh tâm bàn xoay (chấm cam giữa khung hình, tọa độ 0,0) - chạy như
 # tiến trình riêng (subprocess), KHÔNG import trực tiếp vì nó dùng cv2.imshow
 # với vòng lặp blocking riêng, không thể chạy chung luồng với Qt event loop.
-MANUAL_CAMERA_CENTER_SCRIPT = os.path.join(BASE_DIR, "vision", "camera_center_dot.py")
+MANUAL_CAMERA_CENTER_SCRIPT = os.path.join(BASE_DIR, "vision", "red_circle_vision.py")
 
 DEFAULT_HOME = (60.0, 0.0, 330.0)
 DEFAULT_Z_SAFE = 340.0
@@ -84,6 +84,19 @@ DOF4_TARGET_ANGLE_DEG = 90.0
 TURNTABLE_MAX_RPM = 65.0
 DET_SCALE = 0.5
 
+# Hệ số kích thước vùng ROI (ô vuông giữa khung hình) dùng để giới hạn vùng
+# tìm vật thể (không áp dụng cho việc tìm khung/lỗ). PHẢI khớp với hệ số
+# đang dùng trong vision/Camera_4dof.py (run_live_display) để hành vi của
+# GUI chính và bản chạy độc lập (camera_4dof.py) nhất quán với nhau:
+#   roi_size = min(w, h) * ROI_SIZE_FACTOR
+ROI_SIZE_FACTOR = 2.0 / 3.0
+
+# Mỗi "bậc" (stop) giảm/tăng độ sáng camera tương ứng với ngần này đơn vị
+# trên thang đo CAP_PROP_BRIGHTNESS của OpenCV (thang này tùy driver camera,
+# thường ~0-255). Dùng chung cho mọi CameraThread nào truyền
+# brightness_step_down != 0.
+CAMERA_BRIGHTNESS_STEP = 10.0
+
 CSV_COLUMNS = ["Loại", "KT/Đường kính", "X (mm)", "Y (mm)", "Góc (°)"]
 CSV_FIELDNAMES = ["type", "diameter_mm", "width_mm", "height_mm", "angle_deg", "x_mm", "y_mm"]
 DYN_COLUMNS = ["Loại", "Slot", "X (mm)", "Y (mm)", "Góc (°)"]
@@ -101,9 +114,17 @@ def _fmt_angle_col(item):
     return f'{float(a):.1f}' if a is not None else "-"
 
 
+def _compute_object_roi(frame_shape):
+    """Tính ô vuông ROI (x, y, w, h) ở giữa khung hình, dùng để giới hạn
+    vùng tìm vật thể - khớp với logic trong vision/Camera_4dof.py."""
+    h, w = frame_shape[:2]
+    roi_size = int(min(w, h) * ROI_SIZE_FACTOR)
+    return (w // 2 - roi_size // 2, h // 2 - roi_size // 2, roi_size, roi_size)
+
+
 def launch_manual_camera_center(camera_index=0):
     """
-    Mở script vision/camera_center_dot.py (chấm cam giữa khung hình để canh
+    Mở script vision/red_circle_vision.py (chấm cam giữa khung hình để canh
     tâm bàn xoay) như một TIẾN TRÌNH RIÊNG (subprocess), không chặn giao
     diện chính. Trả về đối tượng subprocess.Popen nếu mở thành công, None
     nếu lỗi (ví dụ thiếu file hoặc không khởi chạy được).
@@ -120,7 +141,7 @@ def launch_manual_camera_center(camera_index=0):
             [sys.executable, MANUAL_CAMERA_CENTER_SCRIPT, "--index", str(camera_index)]
         )
     except Exception as e:
-        print(f"[MANUAL CAM] Lỗi mở camera_center_dot.py: {e}")
+        print(f"[MANUAL CAM] Lỗi mở red_circle_vision.py: {e}")
         return None
 
 
@@ -145,7 +166,9 @@ def load_config():
         "csv_offset_y": 0.0,
         "csv_match_tolerance": 6.0,
         "csv_match_same_color": True,
-        "csv_z_pick": 340.0,
+        # ĐÃ ĐỔI: 340.0 -> 300.0 (độ cao Z gắp mặc định cho tab CSV /
+        # live-camera auto pick&place).
+        "csv_z_pick": 300.0,
         # ĐÃ ĐỔI: "turn_pwm" (0-255, dùng cho L298N/DC cũ) -> "turn_rpm"
         # (vòng/phút, dùng cho step 17 mới). Nếu file robot_config.json cũ
         # trên máy còn key "turn_pwm", nó sẽ đơn giản bị bỏ qua (không dùng
@@ -232,11 +255,20 @@ class CameraThread(QThread):
     error = Signal(str)
     stopped = Signal()
 
-    def __init__(self, camera_index=0, calib_path=None, detect_mode=COORD_MODE_CIRCLE):
+    def __init__(self, camera_index=0, calib_path=None, detect_mode=COORD_MODE_CIRCLE,
+                 brightness_step_down=0):
+        """
+        brightness_step_down: số "bậc" muốn GIẢM độ sáng camera so với mặc
+            định của driver (mỗi bậc = CAMERA_BRIGHTNESS_STEP đơn vị trên
+            thang CAP_PROP_BRIGHTNESS). Truyền số âm để TĂNG sáng. Mặc định
+            0 = giữ nguyên độ sáng gốc của camera (không đổi hành vi cũ ở
+            những nơi khác đang dùng CameraThread).
+        """
         super().__init__()
         self.camera_index = camera_index
         self.calib_path = calib_path
         self.detect_mode = detect_mode
+        self.brightness_step_down = brightness_step_down
         self._running = False
         self.camera_matrix = None
         self.dist_coeffs = None
@@ -255,6 +287,21 @@ class CameraThread(QThread):
     def stop(self):
         self._running = False
 
+    def _apply_brightness_adjustment(self, cap):
+        if not self.brightness_step_down:
+            return
+        try:
+            current = cap.get(cv2.CAP_PROP_BRIGHTNESS)
+            new_value = current - (CAMERA_BRIGHTNESS_STEP * self.brightness_step_down)
+            cap.set(cv2.CAP_PROP_BRIGHTNESS, new_value)
+            applied = cap.get(cv2.CAP_PROP_BRIGHTNESS)
+            print(
+                f"[CAMERA] Brightness: {current:.0f} -> {applied:.0f} "
+                f"({self.brightness_step_down} stop(s) down)"
+            )
+        except Exception as e:
+            print(f"[CAMERA] Không thể chỉnh brightness: {e}")
+
     def run(self):
         self._running = True
         has_calib = self.load_calibration()
@@ -268,6 +315,7 @@ class CameraThread(QThread):
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         cap.set(cv2.CAP_PROP_FPS, 30)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._apply_brightness_adjustment(cap)
 
         actual_fps = cap.get(cv2.CAP_PROP_FPS)
         actual_w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -303,6 +351,12 @@ class CameraThread(QThread):
 
                 items_out = []
 
+                # ROI (ô vuông giữa khung hình) dùng để giới hạn vùng tìm
+                # vật thể ở các chế độ dof4/dynamic - khớp với
+                # vision/Camera_4dof.py (run_live_display) để hành vi nhất
+                # quán giữa GUI chính và bản chạy độc lập.
+                obj_roi = _compute_object_roi(undistorted.shape)
+
                 if self.detect_mode == COORD_MODE_DYNAMIC:
                     small = cv2.resize(undistorted, None, fx=DET_SCALE, fy=DET_SCALE, interpolation=cv2.INTER_AREA)
                     small_min_area = max(20, int(round(80 * DET_SCALE * DET_SCALE)))
@@ -314,11 +368,15 @@ class CameraThread(QThread):
                     objects = detect_objects(
                         undistorted, cx, cy, fx, fy,
                         mask=dyn_mask, upscale=dyn_upscale, refine_frame=undistorted,
+                        roi=obj_roi,
                     )
 
                     if holes:
                         region = mold_bounding_region(holes, margin_mm=15.0)
                         objects = [o for o in objects if not is_inside_region(o["x_mm"], o["y_mm"], region)]
+
+                    cv2.rectangle(display, (obj_roi[0], obj_roi[1]),
+                                  (obj_roi[0] + obj_roi[2], obj_roi[1] + obj_roi[3]), (255, 0, 0), 2)
 
                     for o_item in objects:
                         px, py = int(round(o_item['cx_px'])), int(round(o_item['cy_px']))
@@ -358,7 +416,12 @@ class CameraThread(QThread):
                     stable = detect_objects(
                         undistorted, cx, cy, fx, fy,
                         mask=dof4_mask, upscale=dof4_upscale, refine_frame=undistorted,
+                        roi=obj_roi,
                     )
+
+                    cv2.rectangle(display, (obj_roi[0], obj_roi[1]),
+                                  (obj_roi[0] + obj_roi[2], obj_roi[1] + obj_roi[3]), (255, 0, 0), 2)
+
                     for t in stable:
                         px, py = int(round(t['cx_px'])), int(round(t['cy_px']))
                         cv2.circle(display, (px, py), 3, (0, 255, 0), -1)
@@ -423,12 +486,24 @@ def home_and_wait(uart, timeout: float = 20.0) -> bool:
         uart.log("[ERR] Chưa kết nối Serial!")
         return False
 
-    if not uart.send_home():
-        return False
-
     if uart.dry_run or uart._serial is None:
+        if not uart.send_home():
+            return False
         uart.log("[DRY-RUN] Giả lập chờ HOME xong -> OK")
         return True
+
+    # FIX 1: xả sạch buffer input TRƯỚC khi gửi HOME, để loại bỏ mọi ACK
+    # "OK" còn sót lại từ các lệnh di chuyển toạ độ (send_position) trước
+    # đó. Nếu không xả, readline() đầu tiên bên dưới có thể đọc trúng
+    # đúng 1 dòng "OK" cũ này -> tưởng lầm là đã Home xong.
+    with uart._lock:
+        try:
+            uart._serial.reset_input_buffer()
+        except Exception:
+            pass
+
+    if not uart.send_home():
+        return False
 
     start_time = time.time()
     old_timeout = uart._serial.timeout
@@ -443,10 +518,22 @@ def home_and_wait(uart, timeout: float = 20.0) -> bool:
             if not line:
                 continue
             upper = line.upper()
-            if any(k in upper for k in ("READY", "OK", "HOME_DONE", "HOME OK")):
-                uart.log(f"[RX] Nhận phản hồi: {line}")
+
+            # FIX 2: KHÔNG chấp nhận "OK" đơn thuần nữa - đó chỉ là ACK
+            # "đã nhận lệnh" (được gửi cho MỌI lệnh, kể cả lệnh di chuyển),
+            # KHÔNG phải tín hiệu "đã Home xong". Chỉ coi là Home xong khi
+            # thấy đúng tín hiệu hoàn tất thật sự từ STM32.
+            is_home_done = (
+                upper == "READY"
+                or "HOME_DONE" in upper
+                or "HOMEDONE" in upper
+                or "HOME OK" in upper
+            )
+            if is_home_done:
+                uart.log(f"[RX] Nhận phản hồi HOME: {line}")
                 return True
-            uart.log(f"[RX] Dòng nhận được: {line}")
+
+            uart.log(f"[RX] Dòng nhận được (không phải tín hiệu Home xong, bỏ qua): {line}")
     finally:
         uart._serial.timeout = old_timeout
 
@@ -486,8 +573,34 @@ def apply_light_palette(app):
     app.setPalette(palette)
 
 
+# =====================================================================
+# BẢNG MÀU DÙNG CHUNG CHO TOÀN BỘ NÚT NHẤN TRONG ỨNG DỤNG
+# ---------------------------------------------------------------------
+# Theo yêu cầu: TẤT CẢ các nút trước đây tô màu XÁM ĐẬM (#757575 và các nút
+# "gray-primary" khác như backBtn #6c757d) nay chuyển sang XANH DƯƠNG (cùng
+# tông với màu nhấn #0078d4 đã dùng cho tiêu đề/khung viền). Các nút trước
+# đây tô màu ĐỎ (cảnh báo/ngắt kết nối/tắt thiết bị...) nay chuyển sang MÀU
+# XÁM trung tính (không còn dùng đỏ trong toàn bộ giao diện).
+# =====================================================================
+BTN_BLUE = "#0078d4"
+BTN_BLUE_HOVER = "#005fa8"
+BTN_BLUE_PRESSED = "#00477e"
+BTN_BLUE_BORDER = "#005fa8"
+
+BTN_GRAY = "#757575"
+BTN_GRAY_HOVER = "#616161"
+BTN_GRAY_PRESSED = "#4a4a4a"
+BTN_GRAY_BORDER = "#5a6268"
+
+# Font chữ dùng chung cho toàn bộ giao diện: Times New Roman (có fallback
+# "Times" / "serif" cho các hệ điều hành không có sẵn font Times New Roman,
+# ví dụ Linux). Khung nhật ký (QTextEdit log) vẫn giữ font monospace
+# (Consolas) để dễ đọc log kỹ thuật, không đổi sang Times New Roman.
+APP_FONT_FAMILY = "'Times New Roman', Times, serif"
+
+
 STYLE_SHEET = """
-QWidget { background-color: #eaf2fb; color: #1a1a1a; font-family: 'Segoe UI', Arial; font-size: 14pt; }
+QWidget { background-color: #eaf2fb; color: #1a1a1a; font-family: 'Times New Roman', Times, serif; font-size: 14pt; }
 QMainWindow { background-color: #eaf2fb; }
 QDialog { background-color: #eaf2fb; color: #1a1a1a; }
 QMessageBox { background-color: #eaf2fb; color: #1a1a1a; }
@@ -501,39 +614,40 @@ QPushButton#jogBtn { background-color: #e8e8e8; color: #1a1a1a; font-size: 20pt;
 QPushButton#jogBtn:hover { background-color: #d0d0d0; }
 QPushButton#homeBtn { background-color: #d0d0d0; border-color: #b0b0b0; font-size: 16pt; min-height: 70px; }
 QPushButton#homeBtn:hover { background-color: #c0c0c0; }
-QPushButton#saveBtn { background-color: #757575; color: #ffffff; font-size: 15pt; min-height: 60px; }
-QPushButton#saveBtn:hover { background-color: #616161; }
-QPushButton#connectBtn { background-color: #757575; color: #ffffff; min-height: 38px; font-size: 11pt; padding: 6px; }
-QPushButton#connectBtn:hover { background-color: #616161; }
-QPushButton#disconnectBtn { background-color: #c00000; color: #ffffff; min-height: 38px; font-size: 11pt; padding: 6px; }
-QPushButton#disconnectBtn:hover { background-color: #a00000; }
-QPushButton#actionBtn { background-color: #757575; color: #ffffff; min-height: 65px; font-size: 16pt; }
-QPushButton#actionBtn:hover { background-color: #616161; }
-QPushButton#dynStartBtn { background-color: #757575; color: #ffffff; min-height: 65px; font-size: 16pt; }
-QPushButton#dynStartBtn:hover { background-color: #616161; }
-QPushButton#dynStopBtn { background-color: #c00000; color: #ffffff; min-height: 65px; font-size: 16pt; }
-QPushButton#dynStopBtn:hover { background-color: #a00000; }
-QPushButton#deviceOnBtn { background-color: #757575; color: #ffffff; min-height: 36px; font-size: 11pt; padding: 4px; }
-QPushButton#deviceOnBtn:hover { background-color: #616161; }
-QPushButton#deviceOffBtn { background-color: #c00000; color: #ffffff; min-height: 36px; font-size: 11pt; padding: 4px; }
-QPushButton#deviceOffBtn:hover { background-color: #a00000; }
+QPushButton#saveBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; font-size: 15pt; min-height: 60px; }
+QPushButton#saveBtn:hover { background-color: #005fa8; }
+QPushButton#connectBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 38px; font-size: 11pt; padding: 6px; }
+QPushButton#connectBtn:hover { background-color: #005fa8; }
+QPushButton#disconnectBtn { background-color: #757575; color: #ffffff; border-color: #5a6268; min-height: 38px; font-size: 11pt; padding: 6px; }
+QPushButton#disconnectBtn:hover { background-color: #616161; }
+QPushButton#actionBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 65px; font-size: 16pt; }
+QPushButton#actionBtn:hover { background-color: #005fa8; }
+QPushButton#dynStartBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 65px; font-size: 16pt; }
+QPushButton#dynStartBtn:hover { background-color: #005fa8; }
+QPushButton#dynStopBtn { background-color: #757575; color: #ffffff; border-color: #5a6268; min-height: 65px; font-size: 16pt; }
+QPushButton#dynStopBtn:hover { background-color: #616161; }
+QPushButton#deviceOnBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 36px; font-size: 11pt; padding: 4px; }
+QPushButton#deviceOnBtn:hover { background-color: #005fa8; }
+QPushButton#deviceOffBtn { background-color: #757575; color: #ffffff; border-color: #5a6268; min-height: 36px; font-size: 11pt; padding: 4px; }
+QPushButton#deviceOffBtn:hover { background-color: #616161; }
 QPushButton#deviceApplyBtn { background-color: #b0b0b0; color: #1a1a1a; min-height: 32px; font-size: 10pt; padding: 4px; }
 QPushButton#deviceApplyBtn:hover { background-color: #a0a0a0; }
 QPushButton#deviceQuickBtn { background-color: #e0e0e0; color: #1a1a1a; min-height: 30px; font-size: 10pt; padding: 2px; border-color: #b0b0b0; }
 QPushButton#deviceQuickBtn:hover { background-color: #d0d0d0; border-color: #0078d4; }
-QPushButton#backBtn { background-color: #6c757d; color: #ffffff; min-height: 44px; font-size: 12pt; border-color: #5a6268; }
-QPushButton#backBtn:hover { background-color: #5a6268; }
-QPushButton#menuBtn { min-height: 80px; font-size: 17pt; background-color: #757575; color: #ffffff; border-color: #5a6268; }
-QPushButton#menuBtn:hover { background-color: #616161; }
+QPushButton#backBtn { background-color: #0078d4; color: #ffffff; min-height: 44px; font-size: 12pt; border-color: #005fa8; }
+QPushButton#backBtn:hover { background-color: #005fa8; }
+QPushButton#menuBtn { min-height: 80px; font-size: 17pt; background-color: #0078d4; color: #ffffff; border-color: #005fa8; }
+QPushButton#menuBtn:hover { background-color: #005fa8; }
 QLabel#menuTitle1 { font-size: 22pt; font-weight: 900; color: #0078d4; }
 QLabel#menuTitle2 { font-size: 18pt; font-weight: 800; color: #1a1a1a; }
 QLabel#menuTitle3 { font-size: 14pt; font-weight: 700; color: #555555; }
+QLabel#menuTitle4 { font-size: 15pt; font-weight: 800; color: #c0392b; }
 QLabel#posDisplay { background-color: #ffffff; border: 2px solid #0078d4; border-radius: 10px; font-size: 26pt; font-weight: 800; color: #0a6b3a; padding: 14px; }
 QLabel#statusOk { color: #0a7a3a; font-weight: 800; font-size: 14pt; }
-QLabel#statusBad { color: #c00000; font-weight: 800; font-size: 14pt; }
+QLabel#statusBad { color: #757575; font-weight: 800; font-size: 14pt; }
 QLabel#sectionTitle { font-size: 15pt; font-weight: 800; color: #1a1a1a; }
 QLabel#deviceStateOn { color: #0a7a3a; font-weight: 800; font-size: 11pt; }
-QLabel#deviceStateOff { color: #c00000; font-weight: 800; font-size: 11pt; }
+QLabel#deviceStateOff { color: #757575; font-weight: 800; font-size: 11pt; }
 QGroupBox#compactBox { margin-top: 10px; padding-top: 8px; font-size: 11pt; }
 QGroupBox#compactBox QSpinBox, QGroupBox#compactBox QDoubleSpinBox { padding: 4px 6px; font-size: 11pt; min-height: 26px; }
 QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit { background-color: #ffffff; border: 2px solid #c0c0c0; border-radius: 8px; padding: 8px; font-size: 13pt; color: #1a1a1a; }
@@ -634,6 +748,21 @@ class AppContext:
         self.dyn_offset_y = self.cfg.get("dyn_offset_y", 0.0)
         self.latest_dyn_objects = []
         self.latest_dyn_holes = []
+
+        # ctx.speed_params: các tham số tốc độ/thời gian của DeltaMotionPlanner
+        # (TIME_MOVE_FAST, TIME_MOVE_DOWN, TIME_MOVE_ACTION, TIME_DELAY_GRIPPER,
+        # TIME_DELAY_DOF4, CONTROL_HZ). Bảng nhập tay ở màn hình chính đã bị
+        # gỡ bỏ theo yêu cầu, nhưng dict này vẫn được khởi tạo với giá trị mặc
+        # định để những phần khác của chương trình đọc ctx.speed_params không
+        # bị lỗi (KHÔNG có UI nào chỉnh sửa các giá trị này nữa).
+        self.speed_params = {
+            "TIME_MOVE_FAST": 0.6,
+            "TIME_MOVE_DOWN": 0.15,
+            "TIME_MOVE_ACTION": 0.15,
+            "TIME_DELAY_GRIPPER": 0.25,
+            "TIME_DELAY_DOF4": 0.15,
+            "CONTROL_HZ": 100.0,
+        }
 
         self.conn_log_callback = None
 

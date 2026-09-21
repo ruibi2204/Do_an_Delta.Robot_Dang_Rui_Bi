@@ -1,34 +1,51 @@
 import time
+import math
 import numpy as np
 from kinematics.dhnghich import inverse_kinematics
 
 # ==== Tốc độ CHUNG (dùng cho move_home() và _try_safe_retreat() - những
 # đoạn di chuyển không thuộc riêng pha gắp hay pha thả) ====
-TIME_MOVE_FAST = 0.4
+TIME_MOVE_FAST = 0.3
 TIME_MOVE_DOWN = 0.3
-TIME_MOVE_ACTION = 0.1
+TIME_MOVE_ACTION = 0.3
 
 # ==== Tốc độ RIÊNG cho pha GẮP (pick_dof4): điểm A -> hạ Z -> tiến sâu gắp.
 # Mặc định lấy bằng giá trị chung ở trên để không phá vỡ hành vi cũ, nhưng
 # giờ có thể chỉnh riêng qua speed_params/GUI mà không ảnh hưởng pha thả. ====
-TIME_MOVE_FAST_PICK = 0.6
-TIME_MOVE_DOWN_PICK = 0.3
-TIME_MOVE_ACTION_PICK = 0.3
+TIME_MOVE_FAST_PICK = 0.3
+TIME_MOVE_DOWN_PICK = 0.55
+TIME_MOVE_ACTION_PICK = 0.25
 
 # ==== Tốc độ RIÊNG cho pha THẢ (place_dof4): điểm B -> hạ Z -> tiến sâu thả. ====
-TIME_MOVE_FAST_PLACE = 0.6
+TIME_MOVE_FAST_PLACE = 0.3
 TIME_MOVE_DOWN_PLACE = 0.3
 TIME_MOVE_ACTION_PLACE = 0.3
 
-TIME_DELAY_GRIPPER = 0.15
-TIME_DELAY_DOF4 = 0.1   # Thời gian chờ bàn xoay/step quay xong
+TIME_DELAY_GRIPPER = 0.2
+TIME_DELAY_DOF4 = 0.2   # Thời gian chờ bàn xoay/step quay xong
 
 CONTROL_HZ = 100.0
+
+# ==== (MỚI - làm thẳng quỹ đạo) ====
+# Khoảng cách Cartesian tối đa (mm) cho phép giữa 2 điểm gửi liên tiếp.
+# TRƯỚC ĐÂY: số bước nội suy (n_steps) chỉ phụ thuộc THỜI GIAN di chuyển
+# (wait_s * CONTROL_HZ), không phụ thuộc khoảng cách. Với đoạn dài nhưng
+# thời gian ngắn (vd TIME_MOVE_ACTION_PICK = 0.25s), số điểm gửi có thể
+# rất ít -> khoảng cách giữa 2 điểm liên tiếp lớn. Vì driver/servo nội suy
+# góc khớp giữa 2 lệnh liên tiếp theo KHÔNG GIAN KHỚP (không phải X-Y-Z),
+# quỹ đạo thực tế bị cong ra khỏi đường thẳng lý tưởng dù nội suy trong
+# phần mềm là tuyến tính hoàn toàn đúng trong Cartesian.
+# SỬA: số bước thực tế = max(số bước theo thời gian, số bước theo khoảng
+# cách = distance / MAX_STEP_MM). Đoạn nào dài sẽ tự chia nhỏ hơn (có thể
+# mất nhiều hơn wait_s một chút), đảm bảo quỹ đạo luôn bám sát đường thẳng
+# bất kể tốc độ đặt ra.
+MAX_STEP_MM = 3.0
 
 # Danh sách tên các tham số tốc độ mà GUI (khung "THAM SỐ TỐC ĐỘ") có thể
 # ghi đè. Dùng chung một danh sách để tránh gõ nhầm tên khóa ở nhiều nơi.
 # Đã thêm 6 khóa _PICK / _PLACE để GUI có thể chỉnh riêng từng pha; 3 khóa
-# gốc (không hậu tố) vẫn giữ để chỉnh tốc độ move_home()/an toàn.
+# gốc (không hậu tố) vẫn giữ để chỉnh tốc độ move_home()/an toàn. Đã thêm
+# MAX_STEP_MM để GUI/skill có thể tinh chỉnh độ mịn quỹ đạo nếu cần.
 SPEED_PARAM_KEYS = (
     "TIME_MOVE_FAST",
     "TIME_MOVE_DOWN",
@@ -42,6 +59,7 @@ SPEED_PARAM_KEYS = (
     "TIME_DELAY_GRIPPER",
     "TIME_DELAY_DOF4",
     "CONTROL_HZ",
+    "MAX_STEP_MM",
 )
 
 
@@ -51,10 +69,16 @@ class MotionError(Exception):
 
 class DeltaMotionPlanner:
 
-    def __init__(self, uart_comm=None, speed_params=None):
-
+    def __init__(self, uart_comm=None, speed_params=None, home_pos=None):
+        """
+        home_pos: tuple (x, y, z) tùy chọn - vị trí Home ĐÃ LƯU ở tab MANUAL
+            (ctx.home_pos). Nếu không truyền, dùng giá trị mặc định cứng
+            (60, 0, 300) để vẫn chạy được dry-run/test độc lập. Có thể cập
+            nhật lại bất cứ lúc nào qua set_home(), ví dụ khi GUI vừa nạp
+            xong ctx.home_pos hoặc người dùng vừa lưu lại Home mới.
+        """
         self.uart = uart_comm
-        self.HOME = (60.0, 0.0, 300.0)
+        self.HOME = tuple(home_pos) if home_pos is not None else (60.0, 0.0, 300.0)
         self.Z_SAFE = 295.0
         self.current_pos = self.HOME  # theo dõi vị trí hiện tại để nội suy đường thẳng
 
@@ -76,6 +100,7 @@ class DeltaMotionPlanner:
             "TIME_DELAY_GRIPPER": TIME_DELAY_GRIPPER,
             "TIME_DELAY_DOF4": TIME_DELAY_DOF4,
             "CONTROL_HZ": CONTROL_HZ,
+            "MAX_STEP_MM": MAX_STEP_MM,
         }
         if speed_params:
             for key in SPEED_PARAM_KEYS:
@@ -100,6 +125,7 @@ class DeltaMotionPlanner:
         self.TIME_DELAY_DOF4 = defaults["TIME_DELAY_DOF4"]
         self.CONTROL_HZ = defaults["CONTROL_HZ"]
         self.CONTROL_DT = 1.0 / self.CONTROL_HZ
+        self.MAX_STEP_MM = defaults["MAX_STEP_MM"]
 
     def update_speed_params(self, speed_params):
 
@@ -117,9 +143,18 @@ class DeltaMotionPlanner:
                 "TIME_DELAY_GRIPPER": self.TIME_DELAY_GRIPPER,
                 "TIME_DELAY_DOF4": self.TIME_DELAY_DOF4,
                 "CONTROL_HZ": self.CONTROL_HZ,
+                "MAX_STEP_MM": self.MAX_STEP_MM,
             },
             **(speed_params or {}),
         })
+
+    def set_home(self, x, y, z):
+        """Cập nhật lại HOME (ví dụ đồng bộ với ctx.home_pos đã lưu ở tab
+        MANUAL). Gọi hàm này ở đầu on_start() của window - giống cách các
+        window khác đang gán ctx.current_pos = list(ctx.home_pos) - để mọi
+        lần move_home()/_try_safe_retreat() sau đó đưa robot về ĐÚNG vị trí
+        Home thực tế thay vì tọa độ mặc định cứng (60, 0, 300)."""
+        self.HOME = (float(x), float(y), float(z))
 
     def send_position(self, x, y, z):
         try:
@@ -147,19 +182,29 @@ class DeltaMotionPlanner:
         return t * t * t * (t * (t * 6 - 15) + 10)  # 6t^5 - 15t^4 + 10t^3
 
     def _move_or_raise(self, x, y, z, wait_s):
-
+        """Di chuyển từ self.current_pos tới (x, y, z) trong khoảng thời gian
+        wait_s. Số bước nội suy (n_steps) lấy giá trị LỚN HƠN giữa:
+          - số bước theo THỜI GIAN  (wait_s * CONTROL_HZ)
+          - số bước theo KHOẢNG CÁCH (distance / MAX_STEP_MM)
+        để đảm bảo khoảng cách Cartesian giữa 2 điểm gửi liên tiếp không
+        bao giờ vượt quá MAX_STEP_MM -> quỹ đạo thực tế bám sát đường thẳng
+        thay vì bị cong do nội suy góc khớp ở phía driver/servo, kể cả khi
+        đoạn đường dài mà thời gian di chuyển ngắn."""
         p1 = np.array(self.current_pos, dtype=float)
         p2 = np.array((x, y, z), dtype=float)
         target = (x, y, z)
 
-        if np.linalg.norm(p2 - p1) < 1e-6:
+        distance = float(np.linalg.norm(p2 - p1))
+        if distance < 1e-6:
             # Không di chuyển thực sự (ví dụ giữ Z), vẫn tôn trọng wait_s để
             # các bước tiếp theo (gripper, dof4...) không bị lệch timing.
             time.sleep(wait_s)
             self.current_pos = target
             return
 
-        n_steps = max(int(wait_s * self.CONTROL_HZ), 1)
+        n_steps_time = max(int(wait_s * self.CONTROL_HZ), 1)
+        n_steps_dist = max(int(math.ceil(distance / self.MAX_STEP_MM)), 1)
+        n_steps = max(n_steps_time, n_steps_dist)
 
         for i in range(1, n_steps + 1):
             t_start = time.perf_counter()
@@ -231,7 +276,7 @@ class DeltaMotionPlanner:
 
         return set_gripper
 
-    def pick_dof4(self, point_a, z_pick=295, gripper_callback=None):
+    def pick_dof4(self, point_a, z_pick=290, gripper_callback=None):
         ax, ay = point_a
         z_action_pick = z_pick + 12
         set_gripper = self._make_set_gripper(gripper_callback)
@@ -240,7 +285,7 @@ class DeltaMotionPlanner:
         try:
             # 1. Đến điểm A trên cao -> hạ Z_pick -> tiến sâu gắp
             #    (dùng bộ tốc độ RIÊNG cho pha gắp: *_PICK)
-            self._move_or_raise(ax, ay, 295, self.TIME_MOVE_FAST_PICK)
+            self._move_or_raise(ax, ay, 290, self.TIME_MOVE_FAST_PICK)
             self._move_or_raise(ax, ay, z_pick, self.TIME_MOVE_DOWN_PICK)
             self._move_or_raise(ax, ay, z_action_pick, self.TIME_MOVE_ACTION_PICK)
 
@@ -250,7 +295,7 @@ class DeltaMotionPlanner:
 
             # 2. Nhấc lên an toàn -> về Home, VẪN GIỮ vật (không xoay,
             #    không thả) - chờ lệnh place_dof4() sau khi thấy khung.
-            self._move_or_raise(ax, ay, 295, self.TIME_MOVE_DOWN_PICK)
+            self._move_or_raise(ax, ay, 290, self.TIME_MOVE_DOWN_PICK)
             self.move_home()
             print("=== ĐÃ GẮP VẬT, ĐANG GIỮ TẠI HOME - CHỜ THẤY KHUNG ===\n")
             return True
@@ -260,10 +305,10 @@ class DeltaMotionPlanner:
             self._try_safe_retreat(ax, ay)
             raise
 
-    def place_dof4(self, place_point, z_pick=295, gripper_callback=None,
+    def place_dof4(self, place_point, z_pick=290, gripper_callback=None,
                     rotate_callback=None, object_angle_deg=None, target_angle_deg=90.0):
         bx, by = place_point
-        z_action_place = z_pick + 12
+        z_action_place = z_pick + 10
         set_gripper = self._make_set_gripper(gripper_callback)
 
         rotation_needed = None
@@ -281,7 +326,7 @@ class DeltaMotionPlanner:
 
             # 2. Sang điểm thả -> hạ xuống -> nhả vật
             #    (dùng bộ tốc độ RIÊNG cho pha thả: *_PLACE)
-            self._move_or_raise(bx, by, 295, self.TIME_MOVE_FAST_PLACE)
+            self._move_or_raise(bx, by, 290, self.TIME_MOVE_FAST_PLACE)
             self._move_or_raise(bx, by, z_pick, self.TIME_MOVE_DOWN_PLACE)
             self._move_or_raise(bx, by, z_action_place, self.TIME_MOVE_ACTION_PLACE)
 
@@ -290,7 +335,7 @@ class DeltaMotionPlanner:
             time.sleep(self.TIME_DELAY_GRIPPER)
 
             # 3. Nhấc lên an toàn -> XOAY NGƯỢC LẠI để reset bậc tự do 4 -> về Home
-            self._move_or_raise(bx, by, 295, self.TIME_MOVE_DOWN_PLACE)
+            self._move_or_raise(bx, by, 290, self.TIME_MOVE_DOWN_PLACE)
             if rotation_needed is not None:
                 self._rotate_dof4(rotate_callback, -rotation_needed)
 
@@ -303,7 +348,7 @@ class DeltaMotionPlanner:
             self._try_safe_retreat(bx, by)
             raise
 
-    def pick_and_place_dof4(self, point_a, z_pick=295, gripper_callback=None,
+    def pick_and_place_dof4(self, point_a, z_pick=290, gripper_callback=None,
                              rotate_callback=None, object_angle_deg=None,
                              place_point=(0.0, 0.0), target_angle_deg=90.0):
         self.pick_dof4(point_a, z_pick=z_pick, gripper_callback=gripper_callback)
@@ -313,7 +358,7 @@ class DeltaMotionPlanner:
             target_angle_deg=target_angle_deg,
         )
 
-    def pick_and_place(self, point_a, point_b, z_pick=295, gripper_callback=None):
+    def pick_and_place(self, point_a, point_b, z_pick=290, gripper_callback=None):
         """Bản KHÔNG có bậc tự do 4 - giữ nguyên y hệt move_delta_4dof.py gốc,
         dùng khi không cần xoay (ví dụ chế độ Cameracircle.py cũ)."""
         return self.pick_and_place_dof4(

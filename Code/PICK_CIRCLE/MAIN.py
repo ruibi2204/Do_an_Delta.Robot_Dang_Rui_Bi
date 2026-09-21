@@ -10,10 +10,10 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(base_path, relative_path)
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator, QPixmap, QPainter
+from PySide6.QtGui import QDoubleValidator, QPixmap, QPainter, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QFrame, QLineEdit, QGroupBox,
+    QLabel, QPushButton, QFrame, QLineEdit, QGroupBox, QDialog,
 )
 
 from windows.manual_window import ManualWindow
@@ -25,7 +25,28 @@ from windows.connection_window import ConnectionWindow
 from windows.repeat_test_window import RepeatTestWindow           # nút đánh giá độ lặp lại
 from windows.draw_window import DrawWindow                        # nút vẽ hình
 from windows.board_calib_window import BoardCalibWindow            # nút hiệu chỉnh camera bằng bàn cờ
-from shared_state import AppContext, apply_light_palette, STYLE_SHEET
+from shared_state import AppContext, apply_light_palette, STYLE_SHEET, APP_FONT_FAMILY
+
+
+# =====================================================================
+# GIAO DIỆN MÀN HÌNH CHÍNH (LAUNCHER) - PHIÊN BẢN GỌN, 4 NÚT CHÍNH
+# ---------------------------------------------------------------------
+# Toàn bộ các nút điều hướng trước đây nằm rải rác thành 3 cột (menu bên
+# trái, khung tham số động học ở giữa, khung đánh giá robot bên phải) nay
+# được GOM LẠI thành đúng 4 nút bấm chính, bố trí cân đối, canh giữa màn
+# hình, theo phong cách "bảng điều khiển" chuyên nghiệp:
+#
+#   1) "MENU CHỨC NĂNG"     -> mở hộp thoại chứa 5 nút điều hướng cũ
+#                               (Manual, Camera..., Static..., v.v.)
+#   2) "THAM SỐ ĐỘNG HỌC"   -> mở hộp thoại nhập 4 tham số cơ khí (R, r, a, b)
+#   3) "ĐÁNH GIÁ CƠ KHÍ"    -> mở hộp thoại chứa 3 nút đánh giá robot
+#                               (Repeat, Draw, Camera Calibration)
+#   4) "KẾT NỐI"             -> giữ nguyên hành vi cũ, mở ConnectionWindow
+#
+# Khung "THAM SỐ TỐC ĐỘ" đã được GỠ BỎ hoàn toàn khỏi giao diện theo yêu
+# cầu (giá trị mặc định vẫn được AppContext khởi tạo ở shared_state.py để
+# không phá vỡ các phần khác của chương trình đọc ctx.speed_params).
+# =====================================================================
 
 
 # Đường dẫn ảnh dùng làm HÌNH NỀN MỜ (watermark) chìm phía sau toàn bộ
@@ -37,85 +58,118 @@ KIN_PANEL_IMAGE_PATH = "delta.png"
 # ảnh chỉ "chìm" nhẹ phía sau, không che chữ/nút phía trên.
 WATERMARK_OPACITY = 0.08
 
-# Kích thước cố định của các nút menu bên trái (canh lề trái), có khoảng
-# cách rõ ràng giữa các nút (không dính liền nhau).
-MENU_BTN_WIDTH = 480
-MENU_BTN_HEIGHT = 90
-MENU_BTN_SPACING = 10  # khoảng trống giữa 2 nút liên tiếp
+# Ảnh LOGO (ví dụ logo Trường ĐHKTCN Cần Thơ) - đặt cố định ở GÓC TRÊN BÊN
+# PHẢI màn hình chính, hiển thị RÕ (không mờ, khác với ảnh watermark ở
+# trên). Đổi tên file này cho khớp với ảnh logo thực tế của bạn.
+LOGO_IMAGE_PATH = "CT.png"
+LOGO_MAX_HEIGHT = 130   # chiều cao tối đa của logo (px), giữ nguyên tỉ lệ
+LOGO_MARGIN = 18        # khoảng cách từ logo tới mép trên/phải cửa sổ (px)
 
-# Nút menu (menuBtnSmall) - ĐÃ ĐỔI từ xanh dương sang XÁM theo yêu cầu.
-MENU_BTN_STYLE = """
-QPushButton#menuBtnSmall {
-    background-color: #757575;
+# ---------------------------------------------------------------------
+# 3 NÚT NHỎ xếp NGANG trên 1 hàng (Tham số động học / Đánh giá cơ khí /
+# Menu chức năng) - nhỏ hơn để vừa bày theo chiều ngang.
+# ---------------------------------------------------------------------
+TOP_BTN_WIDTH  = 280
+TOP_BTN_HEIGHT = 64
+TOP_BTN_SPACING = 24
+
+# Giữ tên biến cũ để tương thích với phần còn lại của file.
+MAIN_BTN_WIDTH  = TOP_BTN_WIDTH
+MAIN_BTN_HEIGHT = TOP_BTN_HEIGHT
+MAIN_BTN_SPACING = TOP_BTN_SPACING
+COLUMN_BTN_WIDTH  = TOP_BTN_WIDTH
+COLUMN_BTN_HEIGHT = TOP_BTN_HEIGHT
+COLUMN_BTN_SPACING = TOP_BTN_SPACING
+
+MAIN_BTN_STYLE = """
+QPushButton#mainMenuBtn {
+    background-color: #0078d4;
     color: #ffffff;
-    border: 2px solid #5a6268;
-    border-radius: 12px;
-    padding: 8px 12px;
+    border: 2px solid #005fa8;
+    border-radius: 14px;
+    padding: 8px 14px;
     font-weight: 700;
-    font-size: 13pt;
+    font-size: 12pt;
 }
-QPushButton#menuBtnSmall:hover {
-    background-color: #616161;
+QPushButton#mainMenuBtn:hover {
+    background-color: #005fa8;
 }
-QPushButton#menuBtnSmall:pressed {
-    background-color: #4a4a4a;
+QPushButton#mainMenuBtn:pressed {
+    background-color: #00477e;
 }
 """
 
-# Kích thước riêng cho nút "Lưu tham số" trong khung THAM SỐ TỐC ĐỘ (cột phải).
-APPLY_BTN_WIDTH = 240
-APPLY_BTN_HEIGHT = 41
+# Biến dự phòng (không còn dùng nút kết nối độc lập nữa)
+CONNECT_BTN_WIDTH  = TOP_BTN_WIDTH
+CONNECT_BTN_HEIGHT = TOP_BTN_HEIGHT
 
-# Kích thước riêng cho nút "Lưu tham số" trong khung THAM SỐ ĐỘNG HỌC (cột
-# giữa) - TO HƠN nút bên khung tốc độ vì khung này giờ chiếm nhiều không
-# gian hơn (đã bỏ ảnh minh họa nhỏ bên dưới, ảnh giờ dùng làm nền mờ).
-KIN_APPLY_BTN_WIDTH = 320
-KIN_APPLY_BTN_HEIGHT = 56
+CONNECT_BTN_STYLE = MAIN_BTN_STYLE.replace("mainMenuBtn", "connectMenuBtn")
 
-# Kích thước riêng cho nút "KẾT NỐI" - đặt canh giữa, ngay dưới khung THAM
-# SỐ ĐỘNG HỌC (cột giữa), KHÔNG còn nằm trong danh sách nút menu bên trái.
-CONNECT_BTN_WIDTH = 320
-CONNECT_BTN_HEIGHT = 64
+# Style dùng cho các nút BÊN TRONG các hộp thoại con (Menu chức năng, Đánh
+# giá cơ khí) - cùng tông xanh dương với 4 nút chính, chỉ nhỏ hơn.
+SUB_BTN_WIDTH = 460
+SUB_BTN_HEIGHT = 80
+SUB_BTN_SPACING = 12
 
-# Danh sách các tham số tốc độ / thời gian di chuyển của robot, đồng bộ với
-# các hằng số cùng tên trong move_delta_4dof.py (DeltaMotionPlanner).
-# key: (nhãn hiển thị, giá trị mặc định)
-SPEED_PARAM_DEFS = [
-    ("TIME_MOVE_FAST", "Time Fast (s)", 0.6),
-    ("TIME_MOVE_DOWN", "Time Down (s)", 0.15),
-    ("TIME_MOVE_ACTION", "Time up (s)", 0.15),
-    ("TIME_DELAY_GRIPPER", "Gripper delay (s)", 0.25),
-    ("TIME_DELAY_DOF4", "Rolate 4 DOF (s)", 0.15),
-    ("CONTROL_HZ", "FREQUENCY (Hz)", 100.0),
+SUB_BTN_STYLE = """
+QPushButton#subMenuBtn {
+    background-color: #0078d4;
+    color: #ffffff;
+    border: 2px solid #005fa8;
+    border-radius: 14px;
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 13pt;
+    text-align: center;
+}
+QPushButton#subMenuBtn:hover {
+    background-color: #005fa8;
+}
+QPushButton#subMenuBtn:pressed {
+    background-color: #00477e;
+}
+"""
+
+# Nút "Đóng" dùng chung cho các hộp thoại con.
+DIALOG_CLOSE_BTN_STYLE = """
+QPushButton#dialogCloseBtn {
+    background-color: #e0e0e0;
+    color: #1a1a1a;
+    border: 2px solid #b0b0b0;
+    border-radius: 12px;
+    padding: 8px 20px;
+    font-weight: 700;
+    font-size: 12pt;
+}
+QPushButton#dialogCloseBtn:hover {
+    background-color: #d0d0d0;
+    border-color: #757575;
+}
+"""
+
+# Kích thước riêng cho nút "Lưu tham số" trong hộp thoại THAM SỐ ĐỘNG HỌC.
+KIN_APPLY_BTN_WIDTH = 260
+KIN_APPLY_BTN_HEIGHT = 52
+
+# Danh sách 5 mục điều hướng trước đây nằm ở cột trái, nay đưa vào hộp
+# thoại "MENU CHỨC NĂNG". Tên nút đã dịch sang tiếng Việt, VIẾT HOA toàn bộ
+# để đồng bộ với 4 nút chính. "Bù trừ tọa độ" là thuật ngữ kỹ thuật chuyên
+# nghiệp hơn cho "offset tọa độ".
+NAV_MENU_ITEMS = [
+    ("ĐIỀU KHIỂN THỦ CÔNG", "manual", ManualWindow),
+    ("CAMERA && BÙ TRỪ TỌA ĐỘ", "camera", CameraWindow),
+    ("GẮP THẢ TĨNH", "csv", CsvWindow),
+    ("GẮP THẢ TĨNH 4 BẬC TỰ DO", "dynamic", DynamicWindow),
+    ("GẮP THẢ ĐỘNG", "dynamic_run4dof", DynamicRun4DofWindow),
 ]
 
-# Style dùng chung cho các nút nhỏ trong khung "ĐÁNH GIÁ ROBOT"
-# (Độ lặp lại / Cơ khí chính xác / Hiệu chỉnh camera bàn cờ...) - cùng
-# objectName "repeatBtn" để tất cả nút trong khung này đồng bộ kích thước
-# và màu sắc, không phải khai báo lặp lại từng nút.
-# ĐÃ ĐỔI từ xanh dương sang XÁM theo yêu cầu.
-ROBOT_EVAL_BTN_STYLE = (
-    "QPushButton#repeatBtn {"
-    "  background-color: #757575; color: #ffffff;"
-    "  border: 2px solid #5a6268; border-radius: 12px;"
-    "  padding: 6px; font-weight: 700; font-size: 13pt;"
-    "}"
-    "QPushButton#repeatBtn:hover { background-color: #616161; }"
-    "QPushButton#repeatBtn:pressed { background-color: #4a4a4a; }"
-)
-
-# Style riêng cho nút "KẾT NỐI" đứng độc lập (canh giữa dưới khung THAM SỐ
-# ĐỘNG HỌC) - CÙNG tông xám với các nút khác, chỉ khác kích thước/objectName
-# để không lẫn với các nút menu bên trái.
-CONNECT_BTN_STYLE = (
-    "QPushButton#connectMenuBtn {"
-    "  background-color: #757575; color: #ffffff;"
-    "  border: 2px solid #5a6268; border-radius: 14px;"
-    "  padding: 10px; font-weight: 700; font-size: 14pt;"
-    "}"
-    "QPushButton#connectMenuBtn:hover { background-color: #616161; }"
-    "QPushButton#connectMenuBtn:pressed { background-color: #4a4a4a; }"
-)
+# Danh sách 3 mục đánh giá cơ khí, đưa vào hộp thoại "ĐÁNH GIÁ CƠ KHÍ".
+# Tên nút đã dịch sang tiếng Việt, VIẾT HOA toàn bộ.
+ROBOT_EVAL_ITEMS = [
+    ("ĐÁNH GIÁ ĐỘ LẶP LẠI", "repeat_test", RepeatTestWindow),
+    ("VẼ HÌNH", "draw", DrawWindow),
+    ("HIỆU CHỈNH CAMERA", "board_calib", BoardCalibWindow),
+]
 
 
 class WatermarkCentralWidget(QWidget):
@@ -125,11 +179,29 @@ class WatermarkCentralWidget(QWidget):
     luôn được Qt vẽ chồng lên sau đó - nên không cần thay đổi gì ở phần bố
     cục hiện có (menu, khung tham số...), ảnh sẽ tự nằm phía dưới cùng."""
 
-    def __init__(self, image_path: str, opacity: float = 0.08, scale: float = 0.6, parent=None):
+    def __init__(self, image_path: str, opacity: float = 0.08, scale: float = 0.6,
+                 logo_path: str = None, logo_max_height: int = 92, logo_margin: int = 18,
+                 parent=None):
         super().__init__(parent)
         self._pixmap = QPixmap(image_path)
         self._opacity = opacity
         self._scale = scale  # 1.0 = phủ kín cửa sổ, nhỏ hơn 1.0 = ảnh nhỏ lại, canh giữa
+
+        # ---- Logo góc trên bên phải: hiển thị RÕ NÉT (không áp dụng độ mờ
+        # watermark), luôn nằm TRÊN CÙNG (đè lên mọi widget con khác) và
+        # được canh lại vị trí mỗi khi cửa sổ đổi kích thước (resizeEvent).
+        self._logo_margin = logo_margin
+        self._logo_label = None
+        if logo_path:
+            logo_pixmap = QPixmap(logo_path)
+            if not logo_pixmap.isNull():
+                scaled_logo = logo_pixmap.scaledToHeight(
+                    logo_max_height, Qt.SmoothTransformation
+                )
+                self._logo_label = QLabel(self)
+                self._logo_label.setPixmap(scaled_logo)
+                self._logo_label.setFixedSize(scaled_logo.size())
+                self._logo_label.raise_()
 
     def paintEvent(self, event):
         if not self._pixmap.isNull() and self.width() > 0 and self.height() > 0:
@@ -148,6 +220,35 @@ class WatermarkCentralWidget(QWidget):
             painter.end()
         super().paintEvent(event)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._logo_label is not None:
+            x = self.width() - self._logo_label.width() - self._logo_margin
+            y = self._logo_margin
+            self._logo_label.move(max(0, x), y)
+            self._logo_label.raise_()
+
+
+def _make_sub_menu_button(text: str) -> QPushButton:
+    """Tạo 1 nút điều hướng dùng bên trong các hộp thoại con (Menu chức
+    năng / Đánh giá cơ khí) - kích thước + màu sắc đồng bộ."""
+    btn = QPushButton(text)
+    btn.setObjectName("subMenuBtn")
+    btn.setStyleSheet(SUB_BTN_STYLE)
+    btn.setFixedWidth(SUB_BTN_WIDTH)
+    btn.setFixedHeight(SUB_BTN_HEIGHT)
+    return btn
+
+
+def _make_dialog_close_button(dialog: QDialog) -> QPushButton:
+    btn = QPushButton("ĐÓNG")
+    btn.setObjectName("dialogCloseBtn")
+    btn.setStyleSheet(DIALOG_CLOSE_BTN_STYLE)
+    btn.setFixedSize(140, 46)
+    btn.clicked.connect(dialog.reject)
+    return btn
+
+
 class LauncherWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -156,14 +257,28 @@ class LauncherWindow(QMainWindow):
         self.ctx = AppContext()
         self._windows = {}
 
+        # Tham chiếu widget nhập tham số động học - được tạo bên trong hộp
+        # thoại "THAM SỐ ĐỘNG HỌC", cần giữ lại để đọc/ghi giá trị.
+        self._kin_edits = {}
+        self._kin_indicators = {}
+        self._kin_dialog = None
+
+        self._nav_dialog = None
+        self._eval_dialog = None
+
+        self._conn_win_embed = None  # sẽ được tạo trong _build_ui
         self._build_ui()
 
+    # -----------------------------------------------------------------
+    # XÂY DỰNG GIAO DIỆN CHÍNH: header + 4 nút bấm, canh giữa màn hình
+    # -----------------------------------------------------------------
     def _build_ui(self):
-        # Central widget giờ là WatermarkCentralWidget để ảnh delta.png nằm
-        # chìm làm nền mờ phía sau toàn bộ giao diện (thay vì chỉ là 1 ảnh
-        # nhỏ nằm dưới khung THAM SỐ ĐỘNG HỌC như trước).
+        # Central widget vẫn là WatermarkCentralWidget để ảnh delta.png nằm
+        # chìm làm nền mờ phía sau toàn bộ giao diện.
         central = WatermarkCentralWidget(
-            resource_path(KIN_PANEL_IMAGE_PATH), opacity=WATERMARK_OPACITY, scale=1
+            resource_path(KIN_PANEL_IMAGE_PATH), opacity=WATERMARK_OPACITY, scale=1,
+            logo_path=resource_path(LOGO_IMAGE_PATH),
+            logo_max_height=LOGO_MAX_HEIGHT, logo_margin=LOGO_MARGIN,
         )
         self.setCentralWidget(central)
 
@@ -171,59 +286,52 @@ class LauncherWindow(QMainWindow):
         main_layout.setContentsMargins(60, 40, 60, 40)
         main_layout.setSpacing(28)
 
-        # ---------- Header: tên trường + tên đề tài + tác giả, canh giữa
-        #            trên toàn bề ngang màn hình, nằm trên cùng ----------
+        # ---------- Header: tên trường + niên khóa + sinh viên + đề tài,
+        #            canh giữa trên toàn bề ngang màn hình ----------
         header = self._build_header()
         main_layout.addLayout(header)
 
-        # ---------- Thân trang: 3 cột ----------
-        body = QHBoxLayout()
-        body.setSpacing(36)
+        # ---------- Thân trang: 3 nút nhỏ trên đầu + ConnectionWindow nhúng
+        #            chiếm toàn bộ phần còn lại của màn hình ----------
+        control_panel = self._build_control_panel()
+        main_layout.addLayout(control_panel, 1)
 
-        left_col = self._build_menu_panel()
-        middle_col = self._build_kinematics_panel()
-
-        right_col = QVBoxLayout()
-        right_col.setAlignment(Qt.AlignTop)
-        robot_eval_group = self._build_robot_eval_panel()
-        right_col.addWidget(robot_eval_group)
-
-        # Khung tham số tốc độ, đặt ngay bên dưới khung "ĐÁNH GIÁ ROBOT"
-        # trong cùng cột phải. Không đụng tới các cột/khung khác.
-        right_col.addSpacing(16)
-        speed_group = self._build_speed_params_panel()
-        right_col.addWidget(speed_group)
-
-        right_col.addStretch()
-
-        body.addLayout(left_col, 3)
-        body.addLayout(middle_col, 3)
-        body.addLayout(right_col, 2)
-
-        main_layout.addLayout(body, 1)
 
     def _build_header(self):
-        """Khối tiêu đề trên cùng: canh giữa theo TOÀN BỀ NGANG màn hình,
-        không thuộc riêng cột nào."""
+        """Khối tiêu đề trên cùng: canh giữa theo TOÀN BỀ NGANG màn hình.
+        4 dòng theo đúng yêu cầu:
+          1) Tên trường
+          2) Niên khóa
+          3) Sinh viên thực hiện
+          4) Tên đề tài
+        """
         header = QVBoxLayout()
         header.setSpacing(4)
         header.setContentsMargins(0, 0, 0, 0)
 
-        title1 = QLabel("CONTROL INTERFACE")
+        title1 = QLabel("TRƯỜNG ĐẠI HỌC KỸ THUẬT - CÔNG NGHỆ CẦN THƠ")
         title1.setObjectName("menuTitle1")
         title1.setAlignment(Qt.AlignCenter)
         title1.setWordWrap(True)
         header.addWidget(title1)
 
-        title2 = QLabel("ROBOT DELTA 4 BẬC TỰ DO")
+        title2 = QLabel("NIÊN KHÓA 2022")
         title2.setObjectName("menuTitle2")
         title2.setAlignment(Qt.AlignCenter)
         header.addWidget(title2)
 
-        title3 = QLabel("ĐẶNG RUI BI")
+        title3 = QLabel("SINH VIÊN THỰC HIỆN: ĐẶNG RUI BI")
         title3.setObjectName("menuTitle3")
         title3.setAlignment(Qt.AlignCenter)
         header.addWidget(title3)
+
+        title4 = QLabel(
+            "ĐỀ TÀI: THIẾT KẾ CHẾ TẠO ROBOT DELTA ỨNG DỤNG HỌC TẬP VÀ NGHIÊN CỨU"
+        )
+        title4.setObjectName("menuTitle4")
+        title4.setAlignment(Qt.AlignCenter)
+        title4.setWordWrap(True)
+        header.addWidget(title4)
 
         header.addSpacing(10)
         line = QFrame()
@@ -233,181 +341,152 @@ class LauncherWindow(QMainWindow):
 
         return header
 
-    def _build_menu_panel(self):
-        """Cột trái: chỉ còn các nút điều hướng, canh lề trái, kích thước
-        nhỏ gọn, có khoảng cách rõ ràng giữa các nút (không dính liền).
-
-        LƯU Ý: nút "KẾT NỐI" đã được TÁCH RA khỏi danh sách này - giờ nằm
-        canh giữa màn hình, ngay dưới khung "THAM SỐ ĐỘNG HỌC" (cột giữa),
-        xem _build_connection_button() / _build_kinematics_panel()."""
-        left_col = QVBoxLayout()
-        left_col.setContentsMargins(0, 0, 0, 0)
-        left_col.setSpacing(MENU_BTN_SPACING)
-        left_col.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-
-        buttons = [
-            ("THỦ CÔNG", "manual", ManualWindow),
-            ("CAMERA && OFFSET TỌA ĐỘ", "camera", CameraWindow),
-            ("BÀI TOÁN TĨNH", "csv", CsvWindow),
-            ("BÀI TOÁN BẬC 4 TĨNH", "dynamic", DynamicWindow),
-            ("BÀI TOÁN ĐỘNG", "dynamic_run4dof", DynamicRun4DofWindow),  # <-- nút mới
-        ]
-        for text, key, cls in buttons:
-            btn = QPushButton(text)
-            # objectName riêng ("menuBtnSmall") + stylesheet riêng, KHÔNG dùng
-            # chung "menuBtn" (min-height 80px trong STYLE_SHEET toàn cục) để
-            # kích thước nhỏ thật sự được áp dụng, không bị đè lại.
-            btn.setObjectName("menuBtnSmall")
-            btn.setStyleSheet(MENU_BTN_STYLE)
-            btn.setFixedWidth(MENU_BTN_WIDTH)
-            btn.setFixedHeight(MENU_BTN_HEIGHT)
-            btn.clicked.connect(lambda checked=False, k=key, c=cls: self._open_tab(k, c))
-            left_col.addWidget(btn, alignment=Qt.AlignLeft)
-
-        left_col.addStretch()
-        return left_col
-
-    def _build_connection_button(self):
-        """Nút "KẾT NỐI" đứng ĐỘC LẬP, canh giữa màn hình, đặt ngay dưới
-        khung "THAM SỐ ĐỘNG HỌC" (cột giữa) - KHÔNG còn nằm trong danh sách
-        nút menu bên trái nữa."""
-        btn = QPushButton("KẾT NỐI")
-        btn.setObjectName("connectMenuBtn")
-        btn.setStyleSheet(CONNECT_BTN_STYLE)
-        btn.setFixedWidth(CONNECT_BTN_WIDTH)
-        btn.setFixedHeight(CONNECT_BTN_HEIGHT)
-        btn.clicked.connect(lambda checked=False: self._open_tab("connection", ConnectionWindow))
-        return btn
-
-    def _add_robot_eval_button(self, layout, text, key, window_cls):
-        """Tạo 1 nút trong khung 'ĐÁNH GIÁ ROBOT', dùng CHUNG style/kích
-        thước với các nút đã có (Độ lặp lại, Cơ khí chính xác...) - cùng
-        objectName 'repeatBtn' + ROBOT_EVAL_BTN_STYLE + setFixedHeight(48)."""
-        btn = QPushButton(text)
-        btn.setObjectName("repeatBtn")
-        btn.setFixedHeight(48)
-        btn.setStyleSheet(ROBOT_EVAL_BTN_STYLE)
-        btn.clicked.connect(lambda checked=False: self._open_tab(key, window_cls))
-        layout.addWidget(btn)
-        return btn
-
-    def _build_robot_eval_panel(self):
-        """Khung tiêu đề 'ĐÁNH GIÁ ROBOT' - cùng phong cách với khung tham số
-        động học nghịch. Chứa các nút truy cập giao diện đánh giá độ lặp
-        lại, vẽ hình và hiệu chỉnh camera bằng bàn cờ."""
-        group = QGroupBox("ĐÁNH GIÁ ROBOT")
-        group.setObjectName("kinGroup")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(10)
-
-        self._add_robot_eval_button(layout, "Độ lặp lại", "repeat_test", RepeatTestWindow)
-        self._add_robot_eval_button(layout, "Cơ khí chính xác", "draw", DrawWindow)
-        # Nút mới: mở giao diện HIỆU CHỈNH CAMERA BẰNG BÀN CỜ - cùng kích
-        # thước/màu với 2 nút phía trên (không phải khai báo style riêng).
-        self._add_robot_eval_button(layout, "Hiệu chỉnh Camera", "board_calib", BoardCalibWindow)
-
-        return group
-
-    def _build_speed_params_panel(self):
-        """Khung 'THAM SỐ TỐC ĐỘ' - nhập các tham số thời gian/tốc độ dùng
-        trong DeltaMotionPlanner (move_delta_4dof.py): TIME_MOVE_FAST,
-        TIME_MOVE_DOWN, TIME_MOVE_ACTION, TIME_DELAY_GRIPPER,
-        TIME_DELAY_DOF4, CONTROL_HZ. Cùng phong cách với khung THAM SỐ ĐỘNG
-        HỌC (có đèn báo hợp lệ xanh/đỏ), đặt ngay dưới khung ĐÁNH GIÁ ROBOT
-        ở cột phải, không ảnh hưởng tới bố cục các khung khác.
+    # -----------------------------------------------------------------
+    # BẢNG ĐIỀU KHIỂN: 4 nút xếp thành MỘT HÀNG DỌC, canh giữa màn hình.
+    # Thứ tự từ trên xuống: KẾT NỐI -> THAM SỐ ĐỘNG HỌC -> ĐÁNH GIÁ CƠ KHÍ
+    # -> MENU CHỨC NĂNG. Cả 4 nút cùng kích thước để cột thẳng hàng, nhìn
+    # cân đối, chuyên nghiệp.
+    # -----------------------------------------------------------------
+    def _build_control_panel(self):
+        """Bảng điều khiển:
+          - Hàng trên: 3 nút nhỏ xếp NGANG đều (Tham số ĐH / Đánh giá CK / Menu)
+          - Bên dưới: khung ConnectionWindow nhúng trực tiếp (embed)
         """
-        group = QGroupBox("THAM SỐ TỐC ĐỘ")
-        group.setObjectName("kinGroup")
-        grid = QGridLayout(group)
-        grid.setSpacing(1)
+        outer = QVBoxLayout()
+        outer.setSpacing(14)
 
-        defaults = getattr(self.ctx, "speed_params", None) or {
-            key: default for key, _desc, default in SPEED_PARAM_DEFS
-        }
-
-        self._speed_edits = {}
-        self._speed_indicators = {}
-        validator = QDoubleValidator(0.0001, 100000.0, 4)
-        validator.setNotation(QDoubleValidator.StandardNotation)
-
-        for row, (key, desc, _default) in enumerate(SPEED_PARAM_DEFS):
-            lbl = QLabel(desc)
-
-            edit = QLineEdit(str(defaults.get(key, _default)))
-            edit.setValidator(validator)
-            edit.setObjectName("kinEdit")
-            edit.textChanged.connect(lambda text, k=key: self._validate_speed_field(k))
-            edit.editingFinished.connect(self._save_speed_params)
-            self._speed_edits[key] = edit
-
-            dot = QLabel()
-            dot.setFixedSize(10, 10)
-            dot.setObjectName("kinDot")
-            self._speed_indicators[key] = dot
-
-            field_row = QHBoxLayout()
-            field_row.setSpacing(4)
-            field_row.addWidget(edit)
-            field_row.addWidget(dot)
-
-            grid.addWidget(lbl, row, 0)
-            grid.addLayout(field_row, row, 1)
-
-        apply_btn = QPushButton("Lưu tham số")
-        apply_btn.setObjectName("kinApplyBtn")
-        # Cùng kích thước với nút "Lưu tham số" của khung động học, để đồng
-        # bộ phong cách giữa hai khung tham số.
-        apply_btn.setFixedWidth(APPLY_BTN_WIDTH)
-        apply_btn.setFixedHeight(APPLY_BTN_HEIGHT)
-        apply_btn.setStyleSheet(
-            "QPushButton#kinApplyBtn {"
-            "  background-color: #f5f5f5; color: #1a1a1a;"
-            "  border: 2px solid #b0b0b0; border-radius: 14px;"
-            "  padding: 10px; font-weight: 700; font-size: 13pt;"
-            "}"
-            "QPushButton#kinApplyBtn:hover { background-color: #e6e6e6; border-color: #909090; }"
-            "QPushButton#kinApplyBtn:pressed { background-color: #d8d8d8; }"
-        )
-        apply_btn.clicked.connect(self._save_speed_params)
+        # ---- Hàng 3 nút nhỏ trải đều trái → phải ----
         btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(apply_btn)
-        btn_row.addStretch()
-        grid.addLayout(btn_row, len(SPEED_PARAM_DEFS), 0, 1, 2)
+        btn_row.setSpacing(TOP_BTN_SPACING)
+        btn_row.addStretch(1)
 
-        self.ctx.speed_params = dict(defaults)
+        btn_kin = self._make_main_button("THAM SỐ ĐỘNG HỌC")
+        btn_kin.clicked.connect(self._open_kinematics_dialog)
+        btn_row.addWidget(btn_kin)
 
-        # Đánh giá đèn ngay khi khởi tạo, với giá trị mặc định
-        for key in self._speed_edits:
-            self._validate_speed_field(key)
+        btn_eval = self._make_main_button("ĐÁNH GIÁ CƠ KHÍ")
+        btn_eval.clicked.connect(self._open_robot_eval_menu)
+        btn_row.addWidget(btn_eval)
 
-        return group
+        btn_menu = self._make_main_button("MENU CHỨC NĂNG")
+        btn_menu.clicked.connect(self._open_nav_menu)
+        btn_row.addWidget(btn_menu)
 
-    def _build_kinematics_panel(self):
-        """Panel ĐÁNH GIÁ CƠ KHÍ - nhập 4 tham số động học nghịch: R, r, a, b —
-        có đèn báo hợp lệ (xanh/đỏ). Được canh vào giữa màn hình (cột giữa).
+        btn_row.addStretch(1)
+        outer.addLayout(btn_row)
 
-        Kích thước đã được TĂNG LÊN đáng kể (khung rộng hơn, chữ to hơn, ô
-        nhập cao hơn, khoảng cách giữa các hàng giãn ra) để khung này lấp
-        đầy khoảng trống còn lại trong cột giữa - trước đây khoảng trống đó
-        được lấp bằng 1 ảnh minh họa nhỏ bên dưới, nay ảnh đã chuyển thành
-        nền mờ (watermark) cho toàn bộ cửa sổ nên không còn ảnh riêng ở đây
-        nữa.
+        # ---- Nhúng ConnectionWindow trực tiếp (không có khung bên ngoài) ----
+        self._conn_win_embed = ConnectionWindow(self.ctx, self)
+        self._conn_win_embed.setWindowFlags(Qt.Widget)
+        self._conn_win_embed.btn_back.hide()
+        outer.addWidget(self._conn_win_embed, 1)
 
-        Ngay dưới khung này giờ có thêm nút "KẾT NỐI" - canh giữa theo
-        chiều ngang (Qt.AlignHCenter), độc lập với danh sách nút menu bên
-        trái (xem _build_connection_button()).
-        """
-        col = QVBoxLayout()
-        col.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        return outer
 
-        group = QGroupBox("THAM SỐ ĐỘNG HỌC")
+    def _make_main_button(self, text: str) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setObjectName("mainMenuBtn")
+        btn.setStyleSheet(MAIN_BTN_STYLE)
+        btn.setFixedWidth(MAIN_BTN_WIDTH)
+        btn.setFixedHeight(MAIN_BTN_HEIGHT)
+        return btn
+
+    # -----------------------------------------------------------------
+    # (1) HỘP THOẠI "MENU CHỨC NĂNG" - gom 5 nút điều hướng cũ
+    # -----------------------------------------------------------------
+    def _open_nav_menu(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Menu chức năng")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(SUB_BTN_SPACING)
+
+        title = QLabel("CHỌN CHỨC NĂNG")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 15pt; font-weight: 800; color: #0078d4;")
+        layout.addWidget(title)
+        layout.addSpacing(6)
+
+        for text, key, cls in NAV_MENU_ITEMS:
+            btn = _make_sub_menu_button(text)
+            btn.clicked.connect(lambda checked=False, k=key, c=cls: self._nav_and_close(dialog, k, c))
+            layout.addWidget(btn)
+
+        layout.addSpacing(8)
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_row.addWidget(_make_dialog_close_button(dialog))
+        close_row.addStretch(1)
+        layout.addLayout(close_row)
+
+        self._nav_dialog = dialog
+        dialog.exec()
+
+    # -----------------------------------------------------------------
+    # (3) HỘP THOẠI "ĐÁNH GIÁ CƠ KHÍ" - gom 3 nút Repeat/Draw/Camera Calib
+    # -----------------------------------------------------------------
+    def _open_robot_eval_menu(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Đánh giá cơ khí")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(SUB_BTN_SPACING)
+
+        title = QLabel("ĐÁNH GIÁ CƠ KHÍ ROBOT")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 15pt; font-weight: 800; color: #0078d4;")
+        layout.addWidget(title)
+        layout.addSpacing(6)
+
+        for text, key, cls in ROBOT_EVAL_ITEMS:
+            btn = _make_sub_menu_button(text)
+            btn.clicked.connect(lambda checked=False, k=key, c=cls: self._nav_and_close(dialog, k, c))
+            layout.addWidget(btn)
+
+        layout.addSpacing(8)
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_row.addWidget(_make_dialog_close_button(dialog))
+        close_row.addStretch(1)
+        layout.addLayout(close_row)
+
+        self._eval_dialog = dialog
+        dialog.exec()
+
+    def _nav_and_close(self, dialog: QDialog, key: str, window_cls):
+        dialog.accept()
+        self._open_tab(key, window_cls)
+
+    # -----------------------------------------------------------------
+    # (2) HỘP THOẠI "THAM SỐ ĐỘNG HỌC" - 4 tham số cơ khí R, r, a, b
+    # -----------------------------------------------------------------
+    def _open_kinematics_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Tham số động học")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        group = self._build_kinematics_group()
+        layout.addWidget(group)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_row.addWidget(_make_dialog_close_button(dialog))
+        close_row.addStretch(1)
+        layout.addLayout(close_row)
+
+        self._kin_dialog = dialog
+        dialog.exec()
+
+    def _build_kinematics_group(self):
+        """Panel THAM SỐ ĐỘNG HỌC - nhập 4 tham số động học nghịch: R, r, a, b —
+        có đèn báo hợp lệ (xanh/xám). Được đặt bên trong hộp thoại riêng,
+        mở ra khi nhấn nút "THAM SỐ ĐỘNG HỌC" ở màn hình chính."""
+        group = QGroupBox("Kinematics")
         group.setObjectName("kinGroup")
         group.setAlignment(Qt.AlignCenter)  # canh giữa chữ tiêu đề khung
-        # Khung rộng hơn hẳn trước (650 -> 760) và có chiều cao tối thiểu để
-        # thực sự lấp khoảng trống trong cột giữa.
-        group.setMinimumWidth(500)
-        group.setMaximumWidth(600)
+        group.setMinimumWidth(480)
         group.setStyleSheet("QGroupBox#kinGroup { font-size: 16pt; font-weight: 700; }")
         grid = QGridLayout(group)
         grid.setContentsMargins(28, 36, 28, 28)
@@ -424,30 +503,26 @@ class LauncherWindow(QMainWindow):
         validator.setNotation(QDoubleValidator.StandardNotation)
 
         labels = [
-            ("R", "Bán kính đế (R, mm)"),
-            ("r", "Bán kính bàn (r, mm)"),
-            ("a", "Chiều dài cánh trên (a, mm)"),
-            ("b", "Chiều dài cánh dưới (b, mm)"),
+            ("R", "Fixed Base (R, mm)"),
+            ("r", "End Effector (r, mm)"),
+            ("a", "Active Arm (a, mm)"),
+            ("b", "Passive Arm (b, mm)"),
         ]
 
         for row, (key, desc) in enumerate(labels):
             lbl = QLabel(desc)
-            # Nhãn chữ to hơn hẳn (13pt -> 15pt) để tương xứng với khung
-            # đã được phóng lớn.
-            lbl.setStyleSheet("font-size: 15pt;")
+            lbl.setStyleSheet("font-size: 14pt;")
 
             edit = QLineEdit(str(defaults[key]))
             edit.setValidator(validator)
             edit.setObjectName("kinEdit")
-            # Ô nhập cao hơn (52px) và chữ to hơn (15pt) để dễ đọc, dễ bấm.
-            edit.setMinimumHeight(52)
-            edit.setStyleSheet("QLineEdit#kinEdit { font-size: 15pt; padding: 6px 10px; }")
+            edit.setMinimumHeight(48)
+            edit.setStyleSheet("QLineEdit#kinEdit { font-size: 14pt; padding: 6px 10px; }")
             edit.textChanged.connect(lambda text, k=key: self._validate_kin_field(k))
             edit.editingFinished.connect(self._save_kin_params)
             self._kin_edits[key] = edit
 
             dot = QLabel()
-            # Đèn báo cũng to hơn tương ứng (20px -> 26px).
             dot.setFixedSize(15, 15)
             dot.setObjectName("kinDot")
             self._kin_indicators[key] = dot
@@ -460,44 +535,26 @@ class LauncherWindow(QMainWindow):
             grid.addWidget(lbl, row, 0)
             grid.addLayout(field_row, row, 1)
 
-        apply_btn = QPushButton("Lưu tham số")
+        apply_btn = QPushButton("LƯU")
         apply_btn.setObjectName("kinApplyBtn")
-        # Nút màu xám trắng (khác với các nút hành động màu xám đậm) để phân
-        # biệt đây là thao tác lưu cấu hình, không phải điều khiển robot.
-        # Kích thước TO HƠN nút cùng loại ở khung THAM SỐ TỐC ĐỘ, vì khung
-        # này giờ chiếm nhiều diện tích hơn.
         apply_btn.setFixedWidth(KIN_APPLY_BTN_WIDTH)
         apply_btn.setFixedHeight(KIN_APPLY_BTN_HEIGHT)
         apply_btn.setStyleSheet(
             "QPushButton#kinApplyBtn {"
-            "  background-color: #f5f5f5; color: #1a1a1a;"
-            "  border: 2px solid #b0b0b0; border-radius: 16px;"
-            "  padding: 10px; font-weight: 700; font-size: 15pt;"
+            "  background-color: #0078d4; color: #ffffff;"
+            "  border: 2px solid #005fa8; border-radius: 16px;"
+            "  padding: 10px; font-weight: 700; font-size: 14pt;"
             "}"
-            "QPushButton#kinApplyBtn:hover { background-color: #e6e6e6; border-color: #909090; }"
-            "QPushButton#kinApplyBtn:pressed { background-color: #d8d8d8; }"
+            "QPushButton#kinApplyBtn:hover { background-color: #005fa8; }"
+            "QPushButton#kinApplyBtn:pressed { background-color: #00477e; }"
         )
         apply_btn.clicked.connect(self._save_kin_params)
-        # Đặt nút nằm giữa 2 cột của grid, canh giữa theo chiều ngang (không
-        # kéo giãn hết bề rộng khung nữa vì đã có kích thước cố định).
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         btn_row.addWidget(apply_btn)
         btn_row.addStretch()
         grid.addLayout(btn_row, len(labels), 0, 1, 2)
-        grid.setRowMinimumHeight(len(labels) + 1, 20)
-
-        col.addWidget(group, alignment=Qt.AlignHCenter)
-
-        # ---- Nút "KẾT NỐI" - canh giữa, ngay dưới khung THAM SỐ ĐỘNG HỌC ----
-        col.addSpacing(24)
-        connect_btn = self._build_connection_button()
-        col.addWidget(connect_btn, alignment=Qt.AlignHCenter)
-
-        # Khoảng trống bên dưới để trống có chủ đích (không còn ảnh minh họa
-        # nhỏ ở đây nữa - ảnh delta.png đã chuyển thành nền mờ của toàn bộ
-        # cửa sổ, xem WatermarkCentralWidget).
-        col.addStretch()
+        grid.setRowMinimumHeight(len(labels) + 1, 16)
 
         self.ctx.kin_params = defaults
 
@@ -505,7 +562,7 @@ class LauncherWindow(QMainWindow):
         for key in self._kin_edits:
             self._validate_kin_field(key)
 
-        return col
+        return group
 
     def _is_valid_kin_value(self, key: str, text: str) -> bool:
         """Quy tắc hợp lệ: là số thực và > 0 (kích thước cơ khí không thể âm hoặc bằng 0)."""
@@ -516,12 +573,15 @@ class LauncherWindow(QMainWindow):
         return value > 0
 
     def _validate_kin_field(self, key: str) -> bool:
-        """Cập nhật đèn xanh/đỏ cho 1 ô, trả về True nếu hợp lệ."""
+        """Cập nhật đèn xanh/xám cho 1 ô, trả về True nếu hợp lệ."""
         edit = self._kin_edits[key]
         dot = self._kin_indicators[key]
         valid = self._is_valid_kin_value(key, edit.text())
 
-        color = "#2ecc71" if valid else "#e74c3c"  # xanh lá / đỏ
+        # Hợp lệ: xanh lá cây (#2ecc71). Không hợp lệ: xám trung tính
+        # (#9e9e9e) thay cho đỏ, để đồng bộ với việc loại bỏ màu đỏ khỏi
+        # toàn bộ giao diện.
+        color = "#2ecc71" if valid else "#9e9e9e"
         dot.setStyleSheet(
             f"background-color: {color}; border-radius: 13px; border: 1px solid #888;"
         )
@@ -538,47 +598,13 @@ class LauncherWindow(QMainWindow):
                 params[key] = float(edit.text())
 
         if not all_valid:
-            return  # còn ô đỏ -> không lưu, đèn đã tự báo cho người dùng biết
+            return  # còn ô báo không hợp lệ -> không lưu
 
         self.ctx.kin_params = params
 
-    def _is_valid_speed_value(self, text: str) -> bool:
-        """Tham số tốc độ/thời gian phải là số thực và > 0."""
-        try:
-            value = float(text)
-        except ValueError:
-            return False
-        return value > 0
-
-    def _validate_speed_field(self, key: str) -> bool:
-        """Cập nhật đèn xanh/đỏ cho 1 ô tham số tốc độ, trả về True nếu hợp lệ."""
-        edit = self._speed_edits[key]
-        dot = self._speed_indicators[key]
-        valid = self._is_valid_speed_value(edit.text())
-
-        color = "#2ecc71" if valid else "#e74c3c"  # xanh lá / đỏ
-        dot.setStyleSheet(
-            f"background-color: {color}; border-radius: 7px; border: 1px solid #888;"
-        )
-        return valid
-
-    def _save_speed_params(self):
-        """Đọc các ô tham số tốc độ, chỉ lưu nếu TẤT CẢ đều hợp lệ (đèn xanh).
-        Giá trị được lưu vào self.ctx.speed_params để các cửa sổ/luồng điều
-        khiển (ví dụ DeltaMotionPlanner) có thể đọc lại khi cần."""
-        all_valid = True
-        params = {}
-        for key, edit in self._speed_edits.items():
-            valid = self._validate_speed_field(key)
-            all_valid = all_valid and valid
-            if valid:
-                params[key] = float(edit.text())
-
-        if not all_valid:
-            return  # còn ô đỏ -> không lưu
-
-        self.ctx.speed_params = params
-
+    # -----------------------------------------------------------------
+    # ĐIỀU HƯỚNG SANG CÁC CỬA SỔ TAB (không đổi so với bản gốc)
+    # -----------------------------------------------------------------
     def _open_tab(self, key, window_cls):
         win = self._windows.get(key)
         if win is None:
@@ -613,6 +639,10 @@ class LauncherWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     apply_light_palette(app)
+    # Font chữ mặc định cho TOÀN BỘ ứng dụng: Times New Roman (áp dụng ở cả
+    # cấp QApplication.setFont lẫn trong STYLE_SHEET, để những widget tạo
+    # ra sau này hoặc không có stylesheet riêng vẫn dùng đúng font này).
+    app.setFont(QFont("Times New Roman", 11))
     app.setStyleSheet(STYLE_SHEET)
     win = LauncherWindow()
     win.showMaximized()

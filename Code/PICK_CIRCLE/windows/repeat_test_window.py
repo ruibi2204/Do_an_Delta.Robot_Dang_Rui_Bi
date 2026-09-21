@@ -4,10 +4,21 @@ import sys
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QDoubleSpinBox, QSpinBox, QPushButton, QTextEdit, QProgressBar, QMessageBox,
+    QDoubleSpinBox, QSpinBox, QSlider, QPushButton, QTextEdit, QProgressBar,
+    QMessageBox,
 )
 
 from shared_state import BaseTabWindow, StreamToSignal, save_config
+
+# Giới hạn / mặc định cho thanh trượt tốc độ (%). 100% = tốc độ mặc định
+# (dùng đúng các TIME_MOVE_* cấu hình trong kinematics/repeat_kinematics.py).
+SPEED_PERCENT_MIN = 20
+SPEED_PERCENT_MAX = 300
+SPEED_PERCENT_DEFAULT = 100
+
+# Giá trị mặc định cho Z DOWN (độ chạm sâu thêm, tương ứng DIP_MM trong
+# kinematics/repeat_kinematics.py) khi chưa có gì lưu trong config.
+Z_DOWN_DEFAULT = 10.0
 
 
 # =====================================================================
@@ -17,8 +28,8 @@ from shared_state import BaseTabWindow, StreamToSignal, save_config
 # gripper (bài test chỉ đánh giá độ lặp lại vị trí cơ khí).
 #
 # Mỗi chu kỳ (planner_repeat.repeat_cycle):
-#   Điểm A -> hạ z_pick -> +2mm -> -2mm -> về Home
-#   -> Điểm B -> hạ z_pick -> +2mm -> -2mm -> về Home
+#   Điểm A -> hạ z_pick -> +Z DOWN -> -Z DOWN -> về Home
+#   -> Điểm B -> hạ z_pick -> +Z DOWN -> -Z DOWN -> về Home
 #
 # Có hỗ trợ dừng "mềm" (dừng sau khi hoàn tất chu trình hiện tại, không
 # ngắt robot giữa chừng để tránh lệch vị trí).
@@ -85,13 +96,17 @@ class RepeatTestWindow(BaseTabWindow):
         super().__init__(ctx, launcher, "ĐÁNH GIÁ ĐỘ LẶP LẠI")
         self.worker = None
         self._build_ui()
+        # Áp dụng ngay tốc độ và Z DOWN đã lưu (hoặc mặc định) cho
+        # planner_repeat lúc mở tab, để planner và giao diện luôn đồng bộ.
+        self._apply_speed_to_planner(self.slider_speed.value())
+        self._apply_zdown_to_planner(self.spin_zdown.value())
 
     # ---------------- UI ----------------
     def _build_ui(self):
         layout = QVBoxLayout(self.content_widget)
         layout.setSpacing(14)
 
-        title = QLabel("ĐÁNH GIÁ ĐỘ LẶP LẠI (REPEATABILITY TEST)")
+        title = QLabel("KIỂM TRA ĐỘ LẶP LẠI")
         title.setObjectName("menuTitle2")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -102,7 +117,7 @@ class RepeatTestWindow(BaseTabWindow):
         cfg = self.ctx.cfg
 
         # ---- Điểm A ----
-        group_a = QGroupBox("ĐIỂM A (tọa độ 1)")
+        group_a = QGroupBox("ĐIỂM A")
         grid_a = QGridLayout(group_a)
         self.spin_ax = self._make_spin(cfg.get("repeat_ax", 10.0))
         self.spin_ay = self._make_spin(cfg.get("repeat_ay", 10.0))
@@ -113,7 +128,7 @@ class RepeatTestWindow(BaseTabWindow):
         row.addWidget(group_a)
 
         # ---- Điểm B ----
-        group_b = QGroupBox("ĐIỂM B (Tọa độ 2)")
+        group_b = QGroupBox("ĐIỂM B")
         grid_b = QGridLayout(group_b)
         self.spin_bx = self._make_spin(cfg.get("repeat_bx", -10.0))
         self.spin_by = self._make_spin(cfg.get("repeat_by", 10.0))
@@ -130,20 +145,59 @@ class RepeatTestWindow(BaseTabWindow):
         self.spin_repeat = QSpinBox()
         self.spin_repeat.setRange(1, 10000)
         self.spin_repeat.setValue(int(cfg.get("repeat_count", 10)))
-        grid_p.addWidget(QLabel("Z gắp (mm):"), 0, 0)
+
+        # (MỚI) Z DOWN - độ chạm sâu thêm sau khi hạ tới z_pick, tương ứng
+        # tham số DIP_MM trong kinematics/repeat_kinematics.py. Trước đây
+        # giá trị này bị cố định trong code (DIP_MM = 10.0), không có ô
+        # nhập trên giao diện. Giờ cho phép người vận hành chỉnh trực tiếp.
+        self.spin_zdown = self._make_spin(
+            cfg.get("repeat_z_down", Z_DOWN_DEFAULT), mn=0.0, mx=100.0
+        )
+        self.spin_zdown.valueChanged.connect(self._on_zdown_changed)
+
+        grid_p.addWidget(QLabel("Z pick (mm):"), 0, 0)
         grid_p.addWidget(self.spin_zpick, 0, 1)
-        grid_p.addWidget(QLabel("Số lần lặp:"), 1, 0)
+        grid_p.addWidget(QLabel("SỐ LẦN LẶP:"), 1, 0)
         grid_p.addWidget(self.spin_repeat, 1, 1)
+        grid_p.addWidget(QLabel("Z HẠ (mm):"), 2, 0)
+        grid_p.addWidget(self.spin_zdown, 2, 1)
         row.addWidget(group_p)
+
+        # ---- Tốc độ (thanh trượt kéo) ----
+        group_speed = QGroupBox("TỐC ĐỘ")
+        speed_layout = QVBoxLayout(group_speed)
+
+        self.slider_speed = QSlider(Qt.Horizontal)
+        self.slider_speed.setObjectName("repeatSpeedSlider")
+        self.slider_speed.setMinimum(SPEED_PERCENT_MIN)
+        self.slider_speed.setMaximum(SPEED_PERCENT_MAX)
+        self.slider_speed.setValue(int(cfg.get("repeat_speed_percent", SPEED_PERCENT_DEFAULT)))
+        self.slider_speed.setTickPosition(QSlider.TicksBelow)
+        self.slider_speed.setTickInterval(20)
+        self.slider_speed.valueChanged.connect(self._on_speed_changed)
+
+        self.lbl_speed_value = QLabel(f"{self.slider_speed.value()}%")
+        self.lbl_speed_value.setAlignment(Qt.AlignCenter)
+        self.lbl_speed_value.setStyleSheet("font-size:13pt; font-weight:600; color:#0a5b8a;")
+
+        speed_hint = QLabel("100% = mặc định, kéo để nhanh/chậm hơn")
+        speed_hint.setAlignment(Qt.AlignCenter)
+        speed_hint.setWordWrap(True)
+        speed_hint.setStyleSheet("color:#666666; font-size:9pt;")
+
+        speed_layout.addWidget(self.slider_speed)
+        speed_layout.addWidget(self.lbl_speed_value)
+        speed_layout.addWidget(speed_hint)
+        row.addWidget(group_speed)
 
         layout.addLayout(row)
 
         # ---- Nút điều khiển ----
         btn_row = QHBoxLayout()
-        self.btn_start = QPushButton("▶  START")
+        self.btn_start = QPushButton("▶  BẮT ĐẦU")
         self.btn_start.setObjectName("dynStartBtn")
         self.btn_start.clicked.connect(self.on_start)
-        self.btn_stop = QPushButton("■  STOP")
+        self.btn_stop = QPushButton("■  DỪNG")
         self.btn_stop.setObjectName("dynStopBtn")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.on_stop)
@@ -155,7 +209,7 @@ class RepeatTestWindow(BaseTabWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Sẵn sàng")
+        self.progress_bar.setFormat("SẴN SÀNG")
         layout.addWidget(self.progress_bar)
 
         self.lbl_status = QLabel("Trạng thái: Sẵn sàng")
@@ -183,6 +237,37 @@ class RepeatTestWindow(BaseTabWindow):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
 
+    # ---------------- Tốc độ ----------------
+    def _apply_speed_to_planner(self, percent):
+        """Áp dụng % tốc độ hiện tại xuống planner_repeat (nếu đã tồn tại).
+        An toàn để gọi bất cứ lúc nào, kể cả khi bài test đang chạy - chỉ áp
+        dụng cho đoạn di chuyển tiếp theo, không ngắt chuyển động hiện tại."""
+        planner = getattr(self.ctx, "planner_repeat", None)
+        if planner is not None and hasattr(planner, "set_speed_scale"):
+            planner.set_speed_scale(percent / 100.0)
+
+    def _on_speed_changed(self, value):
+        self.lbl_speed_value.setText(f"{value}%")
+        self._apply_speed_to_planner(value)
+        self.ctx.cfg["repeat_speed_percent"] = value
+        save_config(self.ctx.cfg)
+
+    # ---------------- (MỚI) Z DOWN ----------------
+    def _apply_zdown_to_planner(self, value):
+        """Áp dụng giá trị Z DOWN (độ chạm sâu thêm) hiện tại xuống
+        planner_repeat (nếu đã tồn tại), qua update_speed_params với khóa
+        DIP_MM - đúng tên tham số trong kinematics/repeat_kinematics.py.
+        An toàn để gọi bất cứ lúc nào, kể cả khi bài test đang chạy - chỉ
+        áp dụng cho lần touch_point() tiếp theo."""
+        planner = getattr(self.ctx, "planner_repeat", None)
+        if planner is not None and hasattr(planner, "update_speed_params"):
+            planner.update_speed_params({"DIP_MM": value})
+
+    def _on_zdown_changed(self, value):
+        self._apply_zdown_to_planner(value)
+        self.ctx.cfg["repeat_z_down"] = value
+        save_config(self.ctx.cfg)
+
     # ---------------- Logic ----------------
     def on_start(self):
         if self.ctx.busy:
@@ -202,6 +287,12 @@ class RepeatTestWindow(BaseTabWindow):
         point_b = (self.spin_bx.value(), self.spin_by.value())
         z_pick = self.spin_zpick.value()
         repeat_count = self.spin_repeat.value()
+        z_down = self.spin_zdown.value()
+
+        # Đảm bảo planner đang dùng đúng tốc độ và Z DOWN hiện tại trên
+        # giao diện trước khi bắt đầu chạy.
+        self._apply_speed_to_planner(self.slider_speed.value())
+        self._apply_zdown_to_planner(z_down)
 
         # lưu lại tham số vào config để lần sau mở lên có sẵn
         self.ctx.cfg["repeat_ax"] = point_a[0]
@@ -210,6 +301,8 @@ class RepeatTestWindow(BaseTabWindow):
         self.ctx.cfg["repeat_by"] = point_b[1]
         self.ctx.cfg["repeat_z_pick"] = z_pick
         self.ctx.cfg["repeat_count"] = repeat_count
+        self.ctx.cfg["repeat_speed_percent"] = self.slider_speed.value()
+        self.ctx.cfg["repeat_z_down"] = z_down
         save_config(self.ctx.cfg)
 
         self.log_view.clear()

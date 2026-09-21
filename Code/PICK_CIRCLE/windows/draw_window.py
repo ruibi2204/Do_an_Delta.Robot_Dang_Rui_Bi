@@ -1,9 +1,9 @@
 import contextlib
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QDoubleSpinBox,
-    QPushButton, QRadioButton, QButtonGroup, QTextEdit, QMessageBox,
+    QPushButton, QRadioButton, QButtonGroup, QTextEdit, QMessageBox, QSlider,
 )
 
 from shared_state import BaseTabWindow, FnWorker, StreamToSignal
@@ -14,15 +14,19 @@ SHAPE_CIRCLE = "circle"
 
 SPINBOX_MAX_W = 130
 
+SPEED_SLIDER_MIN = 1
+SPEED_SLIDER_MAX = 300
+
 
 class DrawWindow(BaseTabWindow):
     """
     Cửa sổ VẼ HÌNH: cho phép robot vẽ một ĐƯỜNG THẲNG hoặc một HÌNH TRÒN
-    với các tham số nhập tay và tốc độ vẽ (mm/s), có nút START/STOP.
+    với các tham số nhập tay và tốc độ vẽ (mm/s, chỉnh bằng ô số hoặc kéo
+    thanh trượt), có nút START/STOP.
     """
 
     def __init__(self, ctx, launcher):
-        super().__init__(ctx, launcher, "✏  VẼ HÌNH (ĐƯỜNG THẲNG / HÌNH TRÒN)")
+        super().__init__(ctx, launcher, "✏  VẼ ĐƯỜNG THẲNG VÀ HÌNH TRÒN")
         self.draw_motion = DrawMotionPlanner(self.ctx.planner)
         self._build_ui()
 
@@ -39,11 +43,11 @@ class DrawWindow(BaseTabWindow):
         left_col.setSpacing(10)
 
         # ---------------- Chọn hình cần vẽ ----------------
-        shape_box = QGroupBox("HÌNH CẦN VẼ")
+        shape_box = QGroupBox("CHỌN HÌNH VẼ")
         shape_box.setObjectName("compactBox")
         shape_layout = QVBoxLayout()
-        self.radio_line = QRadioButton("Đường thẳng")
-        self.radio_circle = QRadioButton("Hình tròn")
+        self.radio_line = QRadioButton("ĐƯỜNG THẲNG")
+        self.radio_circle = QRadioButton("HÌNH TRÒN")
         self.radio_line.setChecked(True)
         self.radio_group_shape = QButtonGroup(self)
         self.radio_group_shape.addButton(self.radio_line, 0)
@@ -55,7 +59,7 @@ class DrawWindow(BaseTabWindow):
         left_col.addWidget(shape_box)
 
         # ---------------- Tham số ĐƯỜNG THẲNG ----------------
-        self.line_box = QGroupBox("THAM SỐ ĐƯỜNG THẲNG")
+        self.line_box = QGroupBox("THÔNG TIN")
         self.line_box.setObjectName("compactBox")
         line_grid = QGridLayout()
         line_grid.setSpacing(6)
@@ -71,12 +75,12 @@ class DrawWindow(BaseTabWindow):
         line_grid.addWidget(QLabel("Y1 (mm):"), 1, 0); line_grid.addWidget(self.spin_line_y1, 1, 1)
         line_grid.addWidget(QLabel("X2 (mm):"), 2, 0); line_grid.addWidget(self.spin_line_x2, 2, 1)
         line_grid.addWidget(QLabel("Y2 (mm):"), 3, 0); line_grid.addWidget(self.spin_line_y2, 3, 1)
-        line_grid.addWidget(QLabel("Z vẽ (mm):"), 4, 0); line_grid.addWidget(self.spin_line_z, 4, 1)
+        line_grid.addWidget(QLabel("Z VẼ (mm):"), 4, 0); line_grid.addWidget(self.spin_line_z, 4, 1)
         self.line_box.setLayout(line_grid)
         left_col.addWidget(self.line_box)
 
         # ---------------- Tham số HÌNH TRÒN ----------------
-        self.circle_box = QGroupBox("THAM SỐ HÌNH TRÒN")
+        self.circle_box = QGroupBox("THÔNG TIN")
         self.circle_box.setObjectName("compactBox")
         circle_grid = QGridLayout()
         circle_grid.setSpacing(6)
@@ -87,14 +91,14 @@ class DrawWindow(BaseTabWindow):
         self.spin_circle_r = self._make_spin(1, 300, 50.0)
         self.spin_circle_z = self._make_spin(0, 500, 300.0)
 
-        circle_grid.addWidget(QLabel("Tâm X (mm):"), 0, 0); circle_grid.addWidget(self.spin_circle_cx, 0, 1)
-        circle_grid.addWidget(QLabel("Tâm Y (mm):"), 1, 0); circle_grid.addWidget(self.spin_circle_cy, 1, 1)
-        circle_grid.addWidget(QLabel("Bán kính (mm):"), 2, 0); circle_grid.addWidget(self.spin_circle_r, 2, 1)
-        circle_grid.addWidget(QLabel("Z vẽ (mm):"), 3, 0); circle_grid.addWidget(self.spin_circle_z, 3, 1)
+        circle_grid.addWidget(QLabel("Xo (mm):"), 0, 0); circle_grid.addWidget(self.spin_circle_cx, 0, 1)
+        circle_grid.addWidget(QLabel("Yo (mm):"), 1, 0); circle_grid.addWidget(self.spin_circle_cy, 1, 1)
+        circle_grid.addWidget(QLabel("R (mm):"), 2, 0); circle_grid.addWidget(self.spin_circle_r, 2, 1)
+        circle_grid.addWidget(QLabel("Z VẼ (mm):"), 3, 0); circle_grid.addWidget(self.spin_circle_z, 3, 1)
         self.circle_box.setLayout(circle_grid)
         left_col.addWidget(self.circle_box)
 
-        # ---------------- Tốc độ vẽ + Hạ thêm (dùng chung 2 hình) ----------------
+        # ---------------- Tốc độ vẽ (ô số + thanh kéo) + Hạ thêm ----------------
         speed_box = QGroupBox("TỐC ĐỘ VẼ")
         speed_box.setObjectName("compactBox")
         speed_grid = QGridLayout()
@@ -102,18 +106,31 @@ class DrawWindow(BaseTabWindow):
         speed_grid.setColumnMinimumWidth(0, 60)
 
         self.spin_speed = self._make_spin(1, 300, 30.0)
-        speed_grid.addWidget(QLabel("Tốc độ:"), 0, 0)
+        speed_grid.addWidget(QLabel("TỐC ĐỘ:"), 0, 0)
         speed_grid.addWidget(self.spin_speed, 0, 1)
         speed_grid.addWidget(QLabel("mm/s"), 0, 2)
+
+        # Thanh trượt tốc độ - kéo để chỉnh nhanh, đồng bộ 2 chiều với ô số.
+        self.slider_speed = QSlider(Qt.Horizontal)
+        self.slider_speed.setObjectName("drawSpeedSlider")
+        self.slider_speed.setMinimum(SPEED_SLIDER_MIN)
+        self.slider_speed.setMaximum(SPEED_SLIDER_MAX)
+        self.slider_speed.setValue(int(round(self.spin_speed.value())))
+        self.slider_speed.setTickPosition(QSlider.TicksBelow)
+        self.slider_speed.setTickInterval(30)
+        speed_grid.addWidget(self.slider_speed, 1, 0, 1, 3)
+
+        self.spin_speed.valueChanged.connect(self._on_speed_spin_changed)
+        self.slider_speed.valueChanged.connect(self._on_speed_slider_changed)
 
         self.spin_dip = self._make_spin(0, 50, 2.0)
         self.spin_dip.setToolTip(
             "Sau khi hạ tới Z vẽ (Z pick), robot sẽ hạ thêm đoạn này (mm) "
             "trước khi bắt đầu vẽ, giúp đầu vẽ/bút chạm mặt chắc chắn hơn."
         )
-        speed_grid.addWidget(QLabel("Hạ thêm:"), 1, 0)
-        speed_grid.addWidget(self.spin_dip, 1, 1)
-        speed_grid.addWidget(QLabel("mm"), 1, 2)
+        speed_grid.addWidget(QLabel("Z HẠ:"), 2, 0)
+        speed_grid.addWidget(self.spin_dip, 2, 1)
+        speed_grid.addWidget(QLabel("mm"), 2, 2)
 
         speed_box.setLayout(speed_grid)
         left_col.addWidget(speed_box)
@@ -126,10 +143,10 @@ class DrawWindow(BaseTabWindow):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        self.btn_start = QPushButton("▶  START")
+        self.btn_start = QPushButton("▶  BẮT ĐẦU")
         self.btn_start.setObjectName("dynStartBtn")
         self.btn_start.clicked.connect(self.on_start)
-        self.btn_stop = QPushButton("■  STOP")
+        self.btn_stop = QPushButton("■  DỪNG")
         self.btn_stop.setObjectName("dynStopBtn")
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_stop.setEnabled(False)
@@ -165,6 +182,20 @@ class DrawWindow(BaseTabWindow):
 
     def _append_log_threadsafe(self, text):
         QTimer.singleShot(0, lambda: self.log_box.append(text))
+
+    # ---------------- Đồng bộ ô số tốc độ <-> thanh trượt tốc độ ----------------
+    def _on_speed_spin_changed(self, value):
+        v_int = int(round(value))
+        if self.slider_speed.value() != v_int:
+            self.slider_speed.blockSignals(True)
+            self.slider_speed.setValue(v_int)
+            self.slider_speed.blockSignals(False)
+
+    def _on_speed_slider_changed(self, value):
+        if abs(self.spin_speed.value() - value) > 0.05:
+            self.spin_speed.blockSignals(True)
+            self.spin_speed.setValue(float(value))
+            self.spin_speed.blockSignals(False)
 
     # ==================== START / STOP ====================
     def on_start(self):

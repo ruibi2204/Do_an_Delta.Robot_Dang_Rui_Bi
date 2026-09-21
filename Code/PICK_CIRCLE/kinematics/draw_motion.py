@@ -20,6 +20,21 @@ class DrawMotionPlanner:
     thì thời gian di chuyển càng lâu, số điểm gửi theo tần số điều khiển
     cố định của planner (planner.CONTROL_HZ) để chuyển động mượt.
 
+    Ghi chú làm mượt / chống rung (QUAN TRỌNG: đường vẽ vẫn phải THẲNG):
+        - QUỸ ĐẠO KHÔNG GIAN không đổi: đường thẳng vẫn là tổ hợp tuyến
+          tính chính xác giữa 2 điểm đầu/cuối (x = x1 + (x2-x1)*s), hình
+          tròn vẫn là (cx + R*cos, cy + R*sin) với R không đổi. Việc làm
+          mượt chỉ tác động lên THAM SỐ TIẾN TRÌNH s (0..1) theo thời gian,
+          không làm lệch hình dạng đường đi.
+        - THAM SỐ s được lấy từ S-curve bậc 5 (vận tốc và gia tốc = 0 ở
+          đầu/cuối đoạn), thay vì tăng vọt vận tốc từ 0 lên tốc độ vẽ ngay
+          lập tức như trước - đây là nguồn rung chính khi bắt đầu/kết thúc
+          nét vẽ.
+        - Lịch gửi lệnh dùng mốc THỜI GIAN TUYỆT ĐỐI (t0 + step*dt) và s
+          được tính theo THỜI GIAN THỰC ĐÃ TRÔI QUA, không theo số thứ tự
+          bước cố định -> nếu UART gửi bị trễ (jitter) ở vài điểm, quỹ đạo
+          không bị "dồn tốc" bù trừ đột ngột (nguồn rung thứ hai).
+
     Ngoài ra hỗ trợ "hạ thêm" (dip): sau khi hạ tới Z pick (z truyền vào),
     có thể hạ thêm một đoạn nhẹ (dip, mm) trước khi bắt đầu vẽ, để đảm bảo
     bút/đầu vẽ chạm mặt phẳng vẽ chắc chắn hơn Z pick ban đầu.
@@ -63,6 +78,62 @@ class DrawMotionPlanner:
         return z_draw
 
     # ------------------------------------------------------------------
+    # Làm mượt: S-curve bậc 5 áp dụng cho THAM SỐ TIẾN TRÌNH theo thời gian,
+    # KHÔNG tác động tới hình dạng quỹ đạo không gian (đường vẫn thẳng /
+    # hình tròn vẫn tròn tuyệt đối).
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _s_curve(t_frac):
+        """Smoothstep bậc 5 (6t^5 - 15t^4 + 10t^3): vận tốc VÀ gia tốc đều
+        = 0 ở đầu/cuối đoạn -> vào/ra nét vẽ êm, không giật cục."""
+        t = min(max(t_frac, 0.0), 1.0)
+        return t * t * t * (t * (t * 6 - 15) + 10)
+
+    def _walk_time_based(self, duration, xy_fn, z):
+        """Chạy 1 đoạn quỹ đạo trong `duration` giây. `xy_fn(s)` trả về
+        (x, y) tương ứng với tham số tiến trình s trong [0, 1] - s đã được
+        làm mượt bằng S-curve, còn xy_fn chỉ áp dụng nội suy KHÔNG GIAN
+        thuần túy (tuyến tính cho đường thẳng, lượng giác cho hình tròn)
+        nên hình dạng đường đi luôn chính xác.
+
+        Gửi lệnh theo tần số cố định planner.CONTROL_HZ, dùng mốc thời gian
+        tuyệt đối (không cộng dồn sleep) và s tính theo thời gian thực đã
+        trôi qua để không bị trôi / dồn tốc khi UART có độ trễ không đều.
+
+        Trả về True nếu đi hết đoạn, False nếu bị dừng giữa chừng (STOP).
+        """
+        dt = self.planner.CONTROL_DT
+        duration = max(duration, dt * 4)  # đủ điểm để S-curve mượt
+        t0 = time.perf_counter()
+        step = 0
+
+        while True:
+            if self._stop_flag:
+                return False
+
+            step += 1
+            target_time = t0 + step * dt
+            elapsed = min(target_time - t0, duration)
+            frac_time = elapsed / duration
+            finished = frac_time >= 1.0
+
+            s = self._s_curve(frac_time)
+            x, y = xy_fn(s)
+            self._send_or_raise(x, y, z)
+
+            if finished:
+                return True
+
+            # Ngủ tới đúng mốc thời gian kế tiếp trên lưới cố định. Nếu bị
+            # trễ so với mốc (UART chậm), KHÔNG cố đuổi kịp bằng cách tăng
+            # tốc đột ngột ở bước sau - s (tính theo thời gian thực) đã tự
+            # phản ánh đúng vị trí cần có tại thời điểm đó.
+            now = time.perf_counter()
+            sleep_time = target_time - now
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    # ------------------------------------------------------------------
     def draw_line(self, x1, y1, x2, y2, z, speed_mm_s, dip=0.0, return_home=True):
         """Vẽ đoạn thẳng từ (x1,y1) tới (x2,y2) tại độ cao z (Z pick), tốc độ
         speed_mm_s (mm/s). Nếu dip > 0, sau khi hạ tới z sẽ hạ thêm dip (mm)
@@ -75,32 +146,26 @@ class DrawMotionPlanner:
         try:
             # 1. Nhấc bút lên an toàn -> di chuyển tới phía trên điểm bắt đầu
             #    -> hạ xuống Z pick -> hạ thêm đoạn nhẹ (nếu có) -> vẽ.
-            self._lift_and_travel(x1, y1, self.planner.Z_SAFE)
+            self._lift_and_travel(x1, y1, 280)
             z_draw = self._descend_to_draw_z(x1, y1, z, dip)
 
-            # 2. Vẽ đường thẳng: nội suy tuyến tính theo tốc độ vẽ.
+            # 2. Vẽ đường thẳng: nội suy TUYẾN TÍNH tuyệt đối theo tốc độ vẽ
+            #    (s là tổ hợp lồi của 2 điểm đầu/cuối -> luôn nằm đúng trên
+            #    đường thẳng nối x1,y1 - x2,y2, bất kể s tiến triển theo
+            #    thời gian tuyến tính hay theo S-curve).
             length = math.hypot(x2 - x1, y2 - y1)
             if length > 1e-6:
                 duration = length / speed
-                n_steps = max(int(duration * self.planner.CONTROL_HZ), 2)
 
-                for i in range(1, n_steps + 1):
-                    if self._stop_flag:
-                        return False
-                    t_start = time.perf_counter()
+                def xy_fn(s, _x1=x1, _y1=y1, _x2=x2, _y2=y2):
+                    return (_x1 + (_x2 - _x1) * s, _y1 + (_y2 - _y1) * s)
 
-                    t = i / n_steps
-                    x = x1 + (x2 - x1) * t
-                    y = y1 + (y2 - y1) * t
-                    self._send_or_raise(x, y, z_draw)
-
-                    elapsed = time.perf_counter() - t_start
-                    remaining = self.planner.CONTROL_DT - elapsed
-                    if remaining > 0:
-                        time.sleep(remaining)
+                completed = self._walk_time_based(duration, xy_fn, z_draw)
+                if not completed:
+                    return False
 
             # 3. Nhấc bút lên an toàn sau khi vẽ xong.
-            self.planner._move_or_raise(x2, y2, self.planner.Z_SAFE, self.planner.TIME_MOVE_DOWN)
+            self.planner._move_or_raise(x2, y2, 280, self.planner.TIME_MOVE_DOWN)
 
             if return_home:
                 self.planner.move_home()
@@ -125,37 +190,31 @@ class DrawMotionPlanner:
 
         start_x = cx + radius
         start_y = cy
+        direction = -1.0 if clockwise else 1.0
 
         try:
             # 1. Nhấc bút lên an toàn -> di chuyển tới phía trên điểm xuất
             #    phát trên đường tròn (góc 0°) -> hạ xuống Z pick -> hạ thêm
             #    đoạn nhẹ (nếu có) -> vẽ.
-            self._lift_and_travel(start_x, start_y, self.planner.Z_SAFE)
+            self._lift_and_travel(start_x, start_y, 280)
             z_draw = self._descend_to_draw_z(start_x, start_y, z, dip)
 
-            # 2. Vẽ hình tròn: nội suy theo góc, tốc độ dài không đổi.
+            # 2. Vẽ hình tròn: bán kính R KHÔNG ĐỔI trong suốt nét vẽ (đúng
+            #    hình tròn tuyệt đối) - chỉ có góc theta tiến triển theo s
+            #    đã làm mượt để vào/ra nét vẽ êm hơn.
             circumference = 2.0 * math.pi * radius
             duration = circumference / speed
-            n_steps = max(int(duration * self.planner.CONTROL_HZ), 16)
-            direction = -1.0 if clockwise else 1.0
 
-            for i in range(1, n_steps + 1):
-                if self._stop_flag:
-                    return False
-                t_start = time.perf_counter()
+            def xy_fn(s, _cx=cx, _cy=cy, _r=radius, _dir=direction):
+                theta = _dir * 2.0 * math.pi * s
+                return (_cx + _r * math.cos(theta), _cy + _r * math.sin(theta))
 
-                theta = direction * 2.0 * math.pi * (i / n_steps)
-                x = cx + radius * math.cos(theta)
-                y = cy + radius * math.sin(theta)
-                self._send_or_raise(x, y, z_draw)
-
-                elapsed = time.perf_counter() - t_start
-                remaining = self.planner.CONTROL_DT - elapsed
-                if remaining > 0:
-                    time.sleep(remaining)
+            completed = self._walk_time_based(duration, xy_fn, z_draw)
+            if not completed:
+                return False
 
             # 3. Nhấc bút lên an toàn sau khi vẽ xong (đang ở lại điểm xuất phát).
-            self.planner._move_or_raise(start_x, start_y, self.planner.Z_SAFE, self.planner.TIME_MOVE_DOWN)
+            self.planner._move_or_raise(start_x, start_y, 280, self.planner.TIME_MOVE_DOWN)
 
             if return_home:
                 self.planner.move_home()

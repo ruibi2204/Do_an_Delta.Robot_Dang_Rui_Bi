@@ -1,5 +1,3 @@
-import time
-
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton, QLabel,
@@ -16,7 +14,7 @@ from shared_state import (
 
 class ConnectionWindow(BaseTabWindow):
     def __init__(self, ctx, launcher):
-        super().__init__(ctx, launcher, "🔌 KẾT NỐI")
+        super().__init__(ctx, launcher, "KẾT NỐI")
         self._build_ui()
         self.ctx.conn_log_callback = self._append_conn_log
         self._refresh_conn_status()
@@ -40,63 +38,63 @@ class ConnectionWindow(BaseTabWindow):
         left.setContentsMargins(2, 2, 8, 2)
         left.setSpacing(10)
 
-        robot_box = QGroupBox("KẾT NỐI ROBOT (UART 1)")
+        robot_box = QGroupBox("ROBOT UART 1")
         robot_box.setObjectName("compactBox")
         rl = QGridLayout()
         rl.setSpacing(6)
-        rl.addWidget(QLabel("Cổng COM:"), 0, 0)
+        rl.addWidget(QLabel("CỔNG COM:"), 0, 0)
         self.combo_robot_port = QComboBox()
         self.combo_robot_port.setEditable(True)
         rl.addWidget(self.combo_robot_port, 0, 1)
 
-        rl.addWidget(QLabel("Baudrate:"), 0, 2)
+        rl.addWidget(QLabel("TỐC ĐỘ BAUD:"), 0, 2)
         self.combo_robot_baud = QComboBox()
         self.combo_robot_baud.addItems(["115200"])
         self.combo_robot_baud.setCurrentText(str(self.ctx.cfg["robot_baud"]))
         rl.addWidget(self.combo_robot_baud, 0, 3)
 
-        self.btn_robot_connect = QPushButton("🔌 KẾT NỐI")
+        self.btn_robot_connect = QPushButton("KẾT NỐI")
         self.btn_robot_connect.setObjectName("connectBtn")
         self.btn_robot_connect.clicked.connect(self.on_connect_robot)
         rl.addWidget(self.btn_robot_connect, 1, 0, 1, 2)
 
-        self.btn_robot_disconnect = QPushButton("⏻ NGẮT")
+        self.btn_robot_disconnect = QPushButton("⏻ NGẮT KẾT NỐI")
         self.btn_robot_disconnect.setObjectName("disconnectBtn")
         self.btn_robot_disconnect.clicked.connect(self.on_disconnect_robot)
         rl.addWidget(self.btn_robot_disconnect, 1, 2, 1, 2)
 
-        self.lbl_robot_status = QLabel("● Chưa kết nối")
+        self.lbl_robot_status = QLabel("● CHỜ")
         self.lbl_robot_status.setObjectName("statusBad")
         rl.addWidget(self.lbl_robot_status, 2, 0, 1, 4)
         robot_box.setLayout(rl)
         left.addWidget(robot_box)
 
-        pneu_box = QGroupBox("KẾT NỐI THIẾT BỊ PHỤ (UART 2)")
+        pneu_box = QGroupBox("UART 2")
         pneu_box.setObjectName("compactBox")
         pl = QGridLayout()
         pl.setSpacing(6)
-        pl.addWidget(QLabel("Cổng COM:"), 0, 0)
+        pl.addWidget(QLabel("CỔNG COM:"), 0, 0)
         self.combo_pneu_port = QComboBox()
         self.combo_pneu_port.setEditable(True)
         pl.addWidget(self.combo_pneu_port, 0, 1)
 
-        pl.addWidget(QLabel("Baudrate:"), 0, 2)
+        pl.addWidget(QLabel("TỐC ĐỘ BAUD:"), 0, 2)
         self.combo_pneu_baud = QComboBox()
         self.combo_pneu_baud.addItems(["115200"])
         self.combo_pneu_baud.setCurrentText(str(self.ctx.cfg["pneumatic_baud"]))
         pl.addWidget(self.combo_pneu_baud, 0, 3)
 
-        self.btn_pneu_connect = QPushButton("🔌 KẾT NỐI")
+        self.btn_pneu_connect = QPushButton("KẾT NỐI")
         self.btn_pneu_connect.setObjectName("connectBtn")
         self.btn_pneu_connect.clicked.connect(self.on_connect_pneu)
         pl.addWidget(self.btn_pneu_connect, 1, 0, 1, 2)
 
-        self.btn_pneu_disconnect = QPushButton("⏻ NGẮT")
+        self.btn_pneu_disconnect = QPushButton("⏻ NGẮT KẾT NỐI")
         self.btn_pneu_disconnect.setObjectName("disconnectBtn")
         self.btn_pneu_disconnect.clicked.connect(self.on_disconnect_pneu)
         pl.addWidget(self.btn_pneu_disconnect, 1, 2, 1, 2)
 
-        self.lbl_pneu_status = QLabel("● Chưa kết nối")
+        self.lbl_pneu_status = QLabel("● CHỜ")
         self.lbl_pneu_status.setObjectName("statusBad")
         pl.addWidget(self.lbl_pneu_status, 2, 0, 1, 4)
         pneu_box.setLayout(pl)
@@ -114,17 +112,17 @@ class ConnectionWindow(BaseTabWindow):
         right = QVBoxLayout()
         right.setSpacing(10)
 
-        cam_box = QGroupBox("CẤU HÌNH CAMERA")
+        cam_box = QGroupBox("CAMERA")
         cam_box.setObjectName("compactBox")
         cl = QGridLayout()
         cl.setSpacing(6)
-        cl.addWidget(QLabel("Chỉ số Camera:"), 0, 0)
+        cl.addWidget(QLabel("CHỈ SỐ CAMERA:"), 0, 0)
         self.spin_cam_index = QSpinBox()
         self.spin_cam_index.setRange(0, 10)
         self.spin_cam_index.setValue(self.ctx.cfg.get("camera_index", 0))
         cl.addWidget(self.spin_cam_index, 0, 1)
 
-        cl.addWidget(QLabel("File hiệu chuẩn (.npz):"), 1, 0)
+        cl.addWidget(QLabel("TỆP HIỆU CHỈNH (.npz):"), 1, 0)
         self.edit_calib_path = QLineEdit(self.ctx.cfg.get("calib_file", ""))
         cl.addWidget(self.edit_calib_path, 1, 1)
         self.btn_browse_calib = QPushButton("...")
@@ -134,17 +132,27 @@ class ConnectionWindow(BaseTabWindow):
         cam_box.setLayout(cl)
         right.addWidget(cam_box)
 
-        util_box = QGroupBox("TIỆN ÍCH")
+        util_box = QGroupBox("CÔNG CỤ KHÁC")
         util_box.setObjectName("compactBox")
         ul = QHBoxLayout()
         ul.setSpacing(8)
-        self.btn_refresh_ports = QPushButton("🔄 LÀM MỚI CỔNG COM")
+        _UTIL_BTN_STYLE = (
+            "QPushButton { background-color: #0078d4; color: #ffffff;"
+            " border: 2px solid #005fa8; border-radius: 10px;"
+            " font-size: 11pt; font-weight: 700; padding: 6px 12px; }"
+            "QPushButton:hover { background-color: #005fa8; }"
+            "QPushButton:pressed { background-color: #00477e; }"
+        )
+        self.btn_refresh_ports = QPushButton("LÀM MỚI CỔNG COM")
+        self.btn_refresh_ports.setStyleSheet(_UTIL_BTN_STYLE)
+        self.btn_refresh_ports.setFixedHeight(44)
         self.btn_refresh_ports.clicked.connect(self.on_refresh_ports)
-        ul.addWidget(self.btn_refresh_ports)
-        self.btn_save_conn_cfg = QPushButton("💾 LƯU CẤU HÌNH")
-        self.btn_save_conn_cfg.setObjectName("saveBtn")
+        ul.addWidget(self.btn_refresh_ports, 1)
+        self.btn_save_conn_cfg = QPushButton("LƯU")
+        self.btn_save_conn_cfg.setStyleSheet(_UTIL_BTN_STYLE)
+        self.btn_save_conn_cfg.setFixedHeight(44)
         self.btn_save_conn_cfg.clicked.connect(self.on_save_conn_cfg)
-        ul.addWidget(self.btn_save_conn_cfg)
+        ul.addWidget(self.btn_save_conn_cfg, 1)
         util_box.setLayout(ul)
         right.addWidget(util_box)
 
@@ -164,12 +172,12 @@ class ConnectionWindow(BaseTabWindow):
 
     # ------------------------------------------------------------------
     def _build_device_control_box(self):
-        outer_box = QGroupBox("ĐIỀU KHIỂN THIẾT BỊ PHỤ (UART 2)")
+        outer_box = QGroupBox("ĐIỀU KHIỂN THIẾT BỊ PHỤ TRỢ")
         outer_box.setObjectName("compactBox")
         outer_layout = QVBoxLayout()
         outer_layout.setSpacing(8)
 
-        pump_box = QGroupBox("MÁY BƠM")
+        pump_box = QGroupBox("BƠM")
         pump_box.setObjectName("compactBox")
         pump_layout = QHBoxLayout()
         pump_layout.setSpacing(8)
@@ -194,7 +202,7 @@ class ConnectionWindow(BaseTabWindow):
         # ---- BÀN XOAY: giờ dùng step 17 (PUL/DIR), firmware nhận thẳng
         # TURN:<rpm> (vòng/phút, có thể âm). KHÔNG còn khái niệm PWM 0-255
         # (đó là của driver L298N/DC cũ) - xoá toàn bộ lớp quy đổi PWM. ----
-        turn_box = QGroupBox(f"BÀN XOAY (v/p, tối đa ±{TURNTABLE_MAX_RPM:.0f})")
+        turn_box = QGroupBox(f"BÀN XOAY (RPM, TỐI ĐA 60)")
         turn_box.setObjectName("compactBox")
         turn_layout = QVBoxLayout()
         turn_layout.setSpacing(6)
@@ -220,10 +228,10 @@ class ConnectionWindow(BaseTabWindow):
 
         turn_row2 = QHBoxLayout()
         turn_row2.setSpacing(6)
-        self.lbl_turn_state = QLabel("● Đang TẮT")
+        self.lbl_turn_state = QLabel("● TẮT")
         self.lbl_turn_state.setObjectName("deviceStateOff")
         turn_row2.addWidget(self.lbl_turn_state, 1)
-        self.btn_turn_apply_rpm = QPushButton("⟳ ÁP DỤNG RPM")
+        self.btn_turn_apply_rpm = QPushButton("⟳ ÁP DỤNG")
         self.btn_turn_apply_rpm.setObjectName("deviceApplyBtn")
         self.btn_turn_apply_rpm.clicked.connect(self.on_turn_apply_rpm)
         turn_row2.addWidget(self.btn_turn_apply_rpm)
@@ -232,21 +240,20 @@ class ConnectionWindow(BaseTabWindow):
         turn_box.setLayout(turn_layout)
         outer_layout.addWidget(turn_box)
 
-        step_box = QGroupBox("BẬC TỰ DO 4 — GÓC QUAY (STEP)")
-        step_box.setObjectName("compactBox")
+        step_box = QGroupBox("4DOF")
         step_layout = QVBoxLayout()
         step_layout.setSpacing(6)
 
         step_row1 = QHBoxLayout()
         step_row1.setSpacing(6)
-        step_row1.addWidget(QLabel("Góc (độ):"))
+        step_row1.addWidget(QLabel("GÓC (ĐỘ):"))
         self.spin_step_test_angle = QDoubleSpinBox()
         self.spin_step_test_angle.setRange(-3600.0, 3600.0)
         self.spin_step_test_angle.setSingleStep(5.0)
         self.spin_step_test_angle.setValue(float(self.ctx.cfg.get("step_test_angle", 90.0)))
         self.spin_step_test_angle.valueChanged.connect(self._on_step_test_angle_changed)
         step_row1.addWidget(self.spin_step_test_angle, 1)
-        self.btn_step_rotate = QPushButton("↻ QUAY")
+        self.btn_step_rotate = QPushButton("↻ XOAY")
         self.btn_step_rotate.setObjectName("deviceApplyBtn")
         self.btn_step_rotate.clicked.connect(self.on_step_rotate)
         step_row1.addWidget(self.btn_step_rotate)
@@ -254,7 +261,7 @@ class ConnectionWindow(BaseTabWindow):
 
         quick_row = QHBoxLayout()
         quick_row.setSpacing(6)
-        quick_row.addWidget(QLabel("Nhanh:"))
+        quick_row.addWidget(QLabel("NHANH:"))
         for deg, label in ((90, "+90°"), (-90, "-90°"), (180, "+180°")):
             b = QPushButton(label)
             b.setObjectName("deviceQuickBtn")

@@ -4,12 +4,32 @@ import contextlib
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QGroupBox,
-    QDoubleSpinBox, QTextEdit, QSizePolicy, QMessageBox,
+    QDoubleSpinBox, QTextEdit, QSizePolicy, QMessageBox, QSlider,
 )
 
 from shared_state import (
     BaseTabWindow, FnWorker, StreamToSignal, cv2_to_qpixmap,
     save_config, home_and_wait, TURNTABLE_MAX_RPM,
+)
+
+# Các khóa tham số tốc độ (thời gian di chuyển) mà thanh trượt SPEED sẽ
+# scale trên ctx.planner_run4dof (move_run4dof.py). Bao gồm CẢ bộ tốc độ
+# CHUNG lẫn 2 bộ RIÊNG cho pha PICK/PLACE, để kéo 1 thanh trượt là chỉnh
+# nhanh/chậm toàn bộ chu trình cùng lúc. CONTROL_HZ và MAX_STEP_MM KHÔNG
+# nằm trong danh sách này vì chúng quyết định độ mịn/thẳng quỹ đạo, cần
+# giữ nguyên ở mọi mức tốc độ.
+_SPEED_SLIDER_TIME_KEYS = (
+    "TIME_MOVE_FAST",
+    "TIME_MOVE_DOWN",
+    "TIME_MOVE_ACTION",
+    "TIME_MOVE_FAST_PICK",
+    "TIME_MOVE_DOWN_PICK",
+    "TIME_MOVE_ACTION_PICK",
+    "TIME_MOVE_FAST_PLACE",
+    "TIME_MOVE_DOWN_PLACE",
+    "TIME_MOVE_ACTION_PLACE",
+    "TIME_DELAY_GRIPPER",
+    "TIME_DELAY_DOF4",
 )
 
 
@@ -96,34 +116,23 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
         # ---- Trạng thái 2 PHA: PICK (gắp vật, chưa cần khung) và PLACE
         # (đang giữ vật tại Home, chờ thấy khung mới thả) ----
-        # TRƯỚC ĐÂY: 1 chu trình yêu cầu THẤY ĐỦ CẢ vật lẫn khung CÙNG LÚC
-        # mới gọi pick_and_place_dof4() (bản gộp). Hậu quả thực tế (đã xác
-        # nhận qua ảnh chụp màn hình): khi vật đã vào ROI và có tọa độ dự
-        # đoán rõ ràng nhưng khung CHƯA xuất hiện ("Dang quet khung..."),
-        # latest_holes rỗng -> toàn bộ điều kiện `if not objects or not
-        # holes: return` chặn lại -> KHÔNG có lệnh pick nào được gửi đi,
-        # dù vật đã sẵn sàng để gắp từ lâu.
-        # GIỜ: tách 2 pha dùng đúng pick_dof4()/place_dof4() đã có sẵn
-        # trong move_run4dof.py (được viết ra chính là để phục vụ ca này) -
-        # thấy VẬT là gắp ngay (không chờ khung), giữ tại Home, rồi khi nào
-        # thấy KHUNG mới thả.
         self.holding_object = False
         self._held_object_angle = None
 
         # ==================================================================
-        # ĐẾM CHU TRÌNH ĐỂ TỰ ĐỘNG HIỆU CHỈNH LẠI ĐỘ CHÍNH XÁC (THÊM MỚI)
-        # Sau mỗi RECAL_EVERY_N_CYCLES chu trình gắp-thả THÀNH CÔNG liên
-        # tiếp, tự động tạm dừng vòng lặp, cho robot về HOME VẬT LÝ (chạm
-        # công tắc hành trình - y hệt quy trình của nút STOP/home_and_wait)
-        # để triệt tiêu sai số cộng dồn của động cơ bước, sau đó tự động về
-        # lại HOME ĐÃ LƯU (ctx.home_pos - y hệt lúc bấm START) rồi mới cho
-        # vòng lặp PICK/PLACE tiếp tục bình thường.
+        # ĐẾM CHU TRÌNH ĐỂ TỰ ĐỘNG HIỆU CHỈNH LẠI ĐỘ CHÍNH XÁC
         # ==================================================================
         self.RECAL_EVERY_N_CYCLES = 3
         self.completed_cycles = 0
         self.is_recalibrating = False
 
+        # Ghi lại tham số tốc độ GỐC (100%) của planner_run4dof ngay khi
+        # window được tạo, để thanh trượt luôn scale từ một mốc cố định
+        # chứ không bị trôi dần qua nhiều lần kéo.
+        self._base_speed_params = self._capture_base_speed_params()
+
         self._build_ui()
+        self._restore_saved_speed_percent()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -132,6 +141,14 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.btn_stop.setEnabled(self.running)
 
     # ------------------------------------------------------------------
+    def _capture_base_speed_params(self):
+        planner = self.ctx.planner_run4dof
+        return {
+            key: getattr(planner, key)
+            for key in _SPEED_SLIDER_TIME_KEYS
+            if hasattr(planner, key)
+        }
+
     def _build_ui(self):
         root = QHBoxLayout(self.content_widget)
 
@@ -152,7 +169,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
         video_col.addWidget(self.lbl_fps)
 
         cam_btn_row = QHBoxLayout()
-        self.btn_cam_open = QPushButton("▶ MỞ CAMERA (RUN 4DOF)")
+        self.btn_cam_open = QPushButton("▶ MỞ CAMERA (CHẠY 4DOF)")
         self.btn_cam_open.setObjectName("dynStartBtn")
         self.btn_cam_open.clicked.connect(self.on_open_camera)
         self.btn_cam_close = QPushButton("■ ĐÓNG CAMERA")
@@ -165,10 +182,10 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
         # ---------- Nút START / STOP vòng lặp gắp-thả tự động ----------
         start_stop_row = QHBoxLayout()
-        self.btn_start = QPushButton("▶ START")
+        self.btn_start = QPushButton("▶ BẮT ĐẦU")
         self.btn_start.setObjectName("dynStartBtn")
         self.btn_start.clicked.connect(self.on_start)
-        self.btn_stop = QPushButton("■ STOP")
+        self.btn_stop = QPushButton("■ DỪNG")
         self.btn_stop.setObjectName("dynStopBtn")
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_stop.setEnabled(False)
@@ -184,7 +201,33 @@ class DynamicRun4DofWindow(BaseTabWindow):
         # ---------- Cột điều khiển ----------
         ctrl_col = QVBoxLayout()
 
-        # ---------- Khung Z PICK & OFFSET TỌA ĐỘ ----------
+        # ---------- THANH TRƯỢT TỐC ĐỘ (mới) ----------
+        speed_box = QGroupBox("TỐC ĐỘ DI CHUYỂN (CHUNG / PICK / PLACE)")
+        speed_box.setObjectName("compactBox")
+        speed_box.setMaximumHeight(76)
+        speed_layout = QHBoxLayout()
+        speed_layout.setContentsMargins(10, 4, 10, 6)
+        speed_layout.setSpacing(8)
+
+        speed_layout.addWidget(QLabel("Chậm"))
+        self.slider_speed = QSlider(Qt.Horizontal)
+        self.slider_speed.setRange(25, 200)   # 25% (chậm) -> 200% (nhanh gấp đôi)
+        self.slider_speed.setSingleStep(5)
+        self.slider_speed.setPageStep(25)
+        self.slider_speed.setValue(100)
+        self.slider_speed.valueChanged.connect(self._on_speed_slider_changed)
+        speed_layout.addWidget(self.slider_speed, 1)
+        speed_layout.addWidget(QLabel("Nhanh"))
+
+        self.lbl_speed_value = QLabel("100%")
+        self.lbl_speed_value.setMinimumWidth(48)
+        self.lbl_speed_value.setStyleSheet("font-weight:700;")
+        speed_layout.addWidget(self.lbl_speed_value)
+
+        speed_box.setLayout(speed_layout)
+        ctrl_col.addWidget(speed_box)
+
+        # ---------- Khung Z PICK && OFFSET TỌA ĐỘ ----------
         coord_box = QGroupBox("Z PICK && OFFSET TỌA ĐỘ")
         coord_box.setObjectName("compactBox")
         coord_layout = QVBoxLayout()
@@ -221,10 +264,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
         coord_box.setLayout(coord_layout)
         ctrl_col.addWidget(coord_box)
 
-        # ---------- (THÊM MỚI) Khung HIỆU CHỈNH ĐỊNH KỲ ----------
-        # Cho phép người vận hành xem/điều chỉnh trực tiếp trên giao diện
-        # sau bao nhiêu chu trình thì tự động về Home để hiệu chỉnh lại độ
-        # chính xác, thay vì phải sửa code.
+        # ---------- Khung HIỆU CHỈNH ĐỊNH KỲ ----------
         recal_box = QGroupBox("HIỆU CHỈNH ĐỊNH KỲ (TỰ VỀ HOME)")
         recal_box.setObjectName("compactBox")
         recal_layout = QVBoxLayout()
@@ -291,6 +331,32 @@ class DynamicRun4DofWindow(BaseTabWindow):
         root.addLayout(video_col, 3)
         root.addLayout(ctrl_col, 2)
 
+    # ---------------- THANH TRƯỢT TỐC ĐỘ ----------------
+    def _restore_saved_speed_percent(self):
+        """Khôi phục % tốc độ đã lưu lần trước (nếu có) khi mở lại app."""
+        saved_percent = int(self.ctx.cfg.get("run4dof_speed_percent", 100))
+        saved_percent = max(self.slider_speed.minimum(), min(self.slider_speed.maximum(), saved_percent))
+        if saved_percent != 100:
+            self.slider_speed.setValue(saved_percent)  # sẽ tự trigger _on_speed_slider_changed
+        else:
+            self.lbl_speed_value.setText("100%")
+
+    def _on_speed_slider_changed(self, value):
+        self.lbl_speed_value.setText(f"{value}%")
+        scale = value / 100.0
+
+        scaled_params = {}
+        for key, base_time in self._base_speed_params.items():
+            # % càng cao -> di chuyển càng NHANH -> thời gian càng NHỎ.
+            scaled_params[key] = base_time / scale if scale > 0 else base_time
+
+        # KHÔNG scale CONTROL_HZ / MAX_STEP_MM: hai tham số này quyết định
+        # độ mịn và độ thẳng của quỹ đạo, cần giữ nguyên ở mọi tốc độ.
+        self.ctx.planner_run4dof.update_speed_params(scaled_params)
+
+        self.ctx.cfg["run4dof_speed_percent"] = value
+        save_config(self.ctx.cfg)
+
     # ---------------- Z pick & Offset tọa độ ----------------
     def _on_zpick_changed(self, val):
         self.ctx.cfg["run4dof_z_pick"] = val
@@ -304,7 +370,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.ctx.cfg["run4dof_offset_y"] = val
         save_config(self.ctx.cfg)
 
-    # ---------------- (THÊM MỚI) Hiệu chỉnh định kỳ - cấu hình số chu trình ----------------
+    # ---------------- Hiệu chỉnh định kỳ - cấu hình số chu trình ----------------
     def _compute_recal_progress_text(self):
         return f"Đã hoàn tất: {self.completed_cycles}/{self.RECAL_EVERY_N_CYCLES} chu trình"
 
@@ -319,11 +385,13 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self._refresh_recal_progress_label()
 
     # ---------------- Bàn xoay ----------------
-    # Gửi thẳng RPM tới firmware - KHÔNG còn quy đổi ra PWM (bàn xoay đã
-    # đổi từ động cơ DC qua L298N sang step 17 chạy runSpeed() theo RPM).
     def _on_rpm_changed(self, val):
         self.ctx.cfg["run4dof_rpm"] = val
         save_config(self.ctx.cfg)
+        # Nếu bàn xoay đang chạy, đổi RPM cần cập nhật ngay cho dự đoán ảnh,
+        # không đợi tắt/bật lại mới đồng bộ.
+        if self.ctx.turn_state:
+            self._sync_table_rpm_to_vision(val)
 
     def on_turn_on(self):
         if not self.ctx.pneu_uart.is_connected:
@@ -337,12 +405,27 @@ class DynamicRun4DofWindow(BaseTabWindow):
             self.ctx.turn_state = True
             self._append_log(f"↻ Bàn xoay BẬT: {rpm:.1f} v/p")
             self._refresh_turn_label()
+            self._sync_table_rpm_to_vision(rpm)
 
     def on_turn_off(self):
         if self.ctx.pneu_uart.turn_off():
             self.ctx.turn_state = False
             self._append_log("■ Bàn xoay TẮT.")
             self._refresh_turn_label()
+            self._sync_table_rpm_to_vision(0.0)
+
+    def _sync_table_rpm_to_vision(self, rpm):
+        """Báo RPM THỰC TẾ vừa gửi xuống Arduino cho module xử lý ảnh
+        (camera_run4dof.py), để công thức dự đoán vị trí gắp
+        (predict_grasp_pose) luôn dùng đúng tốc độ đang chạy thay vì một
+        hằng số cố định lệch với thực tế. Import lazy + try/except giống
+        cách camera_run4dof được import trong CameraRun4DofThread, để cửa
+        sổ vẫn hoạt động bình thường ngay cả khi chưa mở camera lần nào."""
+        try:
+            from vision.camera_run4dof import set_table_rpm
+            set_table_rpm(rpm)
+        except Exception as e:
+            self._append_log(f"⚠ Không đồng bộ được RPM cho dự đoán ảnh: {e}")
 
     def _refresh_turn_label(self):
         if self.ctx.turn_state:
@@ -368,11 +451,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self._camera_thread.error.connect(self._on_camera_error)
         self._camera_thread.stopped.connect(self._on_camera_stopped)
 
-        # ---- ĐĂNG KÝ camera thread của tab này lên ctx (AppContext) ----
-        # Để các tab khác (circle/dof4 tĩnh, dynamic tĩnh) biết camera vật lý
-        # đang bị tab "BÀI TOÁN ĐỘNG" chiếm dụng, tránh mở trùng / gửi lệnh
-        # robot chồng chéo. Cần AppContext có sẵn thuộc tính
-        # run4dof_camera_thread (xem ghi chú cập nhật shared_state.py).
         self.ctx.run4dof_camera_thread = self._camera_thread
 
         self._camera_thread.start()
@@ -382,21 +460,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         if self._camera_thread is not None:
             self._camera_thread.stop()
 
-    # ------------------------------------------------------------------
-    # TÁCH items (nhận được từ camera_run4dof.py) thành 2 danh sách vật/lỗ.
-    #
-    # BUG ĐÃ PHÁT HIỆN: trước đây tách bằng it.get("type") == "object"/"hole",
-    # nhưng camera_run4dof.py build item như sau (xem file đó):
-    #     - VẬT: item = {**o, "diameter_mm": None, "slot_id": None}
-    #     - LỖ : item = {**h, "diameter_mm": None}
-    # -> KHÔNG dòng nào gắn field "type" cả. Do đó lọc theo "type" SAI với
-    # cả 2 loại.
-    #
-    # SỬA: dùng "slot_id" làm đặc trưng phân biệt - VẬT LUÔN bị ép
-    # slot_id=None, còn LỖ LUÔN giữ slot_id thật (số nguyên 1..8) lấy từ
-    # detect_frame_holes(). Vẫn ưu tiên field "type" nếu sau này
-    # camera_run4dof.py được cập nhật để gắn đúng field này.
-    # ------------------------------------------------------------------
     @staticmethod
     def _split_objects_holes(items):
         objects, holes = [], []
@@ -407,7 +470,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
             elif t == "hole":
                 holes.append(it)
             else:
-                # Không có "type" đáng tin -> suy luận qua slot_id.
                 if it.get("slot_id") is None:
                     objects.append(it)
                 else:
@@ -432,8 +494,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
     def _on_camera_stopped(self):
         self._camera_thread = None
-        # Gỡ đăng ký khỏi ctx ngay khi camera thực sự dừng hẳn, để các tab
-        # khác biết camera đã rảnh trở lại.
         if getattr(self.ctx, "run4dof_camera_thread", None) is not None:
             self.ctx.run4dof_camera_thread = None
         self.video_label.setText("Camera đã đóng")
@@ -448,13 +508,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
     # ---------------- START / STOP vòng lặp gắp-thả tự động ----------------
     def on_start(self):
-        """START: về Home đã lưu trước, sau đó mở camera (nếu chưa mở) và
-        bắt đầu vòng lặp tự động 2 PHA: PICK (gắp vật ngay khi thấy, không
-        cần chờ khung) -> PLACE (giữ vật ở Home, chờ thấy khung mới thả).
-
-        LƯU Ý: dùng ctx.planner_run4dof (kinematics/move_run4dof.py) - planner
-        RIÊNG cho tab BÀI TOÁN ĐỘNG, KHÔNG dùng ctx.planner_dof4 (planner dùng
-        chung với BÀI TOÁN BẬC 4 TĨNH và CSV)."""
         if self.running:
             return
         if not self.ctx.robot_uart.is_connected:
@@ -475,7 +528,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.holding_object = False
         self._held_object_angle = None
 
-        # (THÊM MỚI) reset bộ đếm chu trình mỗi lần bấm START lại từ đầu
         self.completed_cycles = 0
         self.is_recalibrating = False
         self._refresh_recal_progress_label()
@@ -511,16 +563,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.btn_start.setEnabled(True)
 
     def _maybe_start_cycle(self):
-        """Được gọi mỗi khi có frame mới. Chạy theo 2 PHA:
-
-        - CHƯA giữ vật (holding_object=False): chỉ cần thấy VẬT là gắp ngay
-          (pick_dof4) - KHÔNG cần thấy khung. Sau khi gắp xong, robot về Home
-          và giữ nguyên vật, holding_object chuyển thành True.
-
-        - ĐANG giữ vật (holding_object=True): không gắp thêm vật nào khác
-          (tay đang bận), chỉ chờ đến khi latest_holes có dữ liệu thì gọi
-          place_dof4() để thả vào khung, rồi quay lại PHA gắp cho vòng kế.
-        """
         if not self.running or self.cycle_busy or self.ctx.busy:
             return
 
@@ -545,11 +587,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         offset_y = self.spin_offset_y.value()
         z_pick = self.spin_z_pick.value()
 
-        # Dùng TỌA ĐỘ DỰ ĐOÁN (x_mm_grasp/y_mm_grasp) - vị trí vật SẼ CÓ tại
-        # thời điểm robot thực sự chạm/gắp (đã bù cho bàn xoay liên tục
-        # trong lúc robot di chuyển tới), do camera_run4dof.py tính sẵn.
-        # .get(..., fallback) để vẫn chạy được nếu camera_run4dof.py chưa
-        # có 2 trường này (tương thích ngược).
         obj_x = obj.get("x_mm_grasp", obj["x_mm"])
         obj_y = obj.get("y_mm_grasp", obj["y_mm"])
         obj_angle = obj.get("angle_deg_grasp", obj.get("angle_deg"))
@@ -560,7 +597,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         )
 
         point_a = (obj_x + offset_x, obj_y + offset_y)
-        # Lưu lại góc vật lúc gắp để dùng cho bước xoay bù ở PHA PLACE sau.
         self._held_object_angle = obj_angle
 
         def task():
@@ -644,25 +680,12 @@ class DynamicRun4DofWindow(BaseTabWindow):
             self._append_log("⏹ Chu trình thả dừng giữa chừng.")
         self._set_phase_label("đang chờ thấy VẬT...")
 
-        # ==================================================================
-        # (THÊM MỚI) ĐẾM CHU TRÌNH + KÍCH HOẠT HIỆU CHỈNH ĐỊNH KỲ
-        # Chỉ đếm khi chu trình THÀNH CÔNG (ok=True). Khi đủ số chu trình
-        # cấu hình (RECAL_EVERY_N_CYCLES), tự động về HOME vật lý rồi về
-        # lại HOME đã lưu trước khi cho vòng lặp PICK/PLACE tiếp tục.
-        # ==================================================================
         if ok:
             self.completed_cycles += 1
             self._refresh_recal_progress_label()
             if self._maybe_trigger_periodic_recalibration():
-                return  # đang hiệu chỉnh -> giữ nguyên phase hiệu chỉnh, không ghi đè
+                return
 
-    # ==================================================================
-    # (THÊM MỚI) HIỆU CHỈNH ĐỊNH KỲ: sau mỗi RECAL_EVERY_N_CYCLES chu
-    # trình gắp-thả thành công, tự động về HOME vật lý (giống hệt on_stop
-    # -> home_and_wait) rồi về HOME đã lưu (giống hệt on_start ->
-    # send_position tới ctx.home_pos) để triệt tiêu sai số cộng dồn, sau
-    # đó tiếp tục vòng lặp PICK/PLACE bình thường.
-    # ==================================================================
     def _maybe_trigger_periodic_recalibration(self):
         if self.completed_cycles < self.RECAL_EVERY_N_CYCLES:
             return False
@@ -720,29 +743,12 @@ class DynamicRun4DofWindow(BaseTabWindow):
     def _on_cycle_error(self, err):
         self.cycle_busy = False
         self.ctx.busy = False
-        # An toàn: nếu lỗi xảy ra giữa chừng ở BẤT KỲ pha nào, reset lại
-        # trạng thái giữ vật để tránh vòng lặp bị "kẹt" mãi ở PHA PLACE
-        # trong khi thực tế robot đã tự về Home an toàn (không rõ còn giữ
-        # vật hay không) - người vận hành nên kiểm tra tay gắp bằng mắt.
         self.holding_object = False
         self._held_object_angle = None
         self._append_log(f"⚠ LỖI chu trình: {err} (đã reset trạng thái - kiểm tra tay gắp bằng mắt)")
         self._set_phase_label("LỖI - đang chờ thấy VẬT...")
 
     def on_stop(self):
-        """STOP: dừng vòng lặp, đóng camera, chờ chu trình hiện tại (nếu có)
-        hoàn tất, rồi về HOME VẬT LÝ (chạm công tắc hành trình) - GIỐNG HỆT
-        nút STOP của BÀI TOÁN BẬC 4 TĨNH (dynamic_window.py).
-
-        LƯU Ý: nếu dừng đúng lúc đang giữ vật (holding_object=True, chưa kịp
-        thấy khung để thả), vật sẽ VẪN CÒN trên tay gắp khi robot về Home vật
-        lý - cần người vận hành kiểm tra và gỡ vật ra thủ công nếu cần.
-
-        LƯU Ý (THÊM MỚI): nếu STOP được bấm đúng lúc đang hiệu chỉnh định kỳ
-        (is_recalibrating=True, cycle_busy=True), _wait_then_home() bên dưới
-        sẽ tự động CHỜ cho tới khi hiệu chỉnh xong (cycle_busy trở về False)
-        rồi mới cho robot về Home vật lý - không có lệnh nào bị chồng lên
-        nhau."""
         if not self.running and self._camera_thread is None:
             return
         self.running = False
@@ -777,14 +783,6 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self._set_phase_label("(đã dừng)")
         self.btn_start.setEnabled(True)
 
-    # ------------------------------------------------------------------
-    # QUAY LẠI MENU: TRƯỚC ĐÂY chỉ ẩn cửa sổ (BaseTabWindow.go_back gốc),
-    # KHÔNG dừng camera lẫn vòng lặp gắp-thả tự động -> nếu người dùng bấm
-    # START rồi bấm "QUAY LẠI MENU" mà không bấm STOP trước, camera + robot
-    # VẪN TIẾP TỤC chạy ngầm sau khi cửa sổ đã ẩn. Override lại: nếu đang
-    # chạy hoặc camera đang mở thì tự gọi on_stop() (dừng đúng quy trình)
-    # trước khi thực sự rời cửa sổ.
-    # ------------------------------------------------------------------
     def go_back(self):
         if self.running or self._camera_thread is not None:
             self.on_stop()

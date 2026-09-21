@@ -73,8 +73,8 @@ class CircleTracker:
 # thêm điểm ở dải đó và hồi quy lại để tránh sai số ngoại suy.
 # =====================================================================
 _CIRCLE_CALIB = {
-    'white': {'scale': 0.325, 'intercept': 1.0},
-    'black': {'scale': 0.32, 'intercept': 1.0},
+    'white': {'scale': 0.30, 'intercept': 1.0},
+    'black': {'scale': 0.305, 'intercept': 1.0},
 }
 
 

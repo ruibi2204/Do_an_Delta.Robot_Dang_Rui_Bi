@@ -8,12 +8,49 @@ chạy qua từng điểm đó (dùng move_delta_4dof.py) để kiểm tra offse
 Mỗi tác vụ có 1 nút riêng:
   1) CHỤP ẢNH BÀN CỜ  - tự động chụp cho tới khi đủ N ảnh (mặc định 30).
   2) CALIB -> .npz     - chạy calib từ thư mục ảnh, xuất .npz + .yaml.
-  3) XUẤT TOẠ ĐỘ .csv  - xuất lưới toạ độ các giao điểm bàn cờ (theo
-     board_w/board_h/square_size + gốc toạ độ offset_x/offset_y) ra CSV.
+  3) XUẤT TOẠ ĐỘ .csv  - 3 BƯỚC BẮT BUỘC THEO THỨ TỰ:
+       3a) Chụp ảnh bàn cờ Ở VỊ TRÍ CHUẨN - ĐẾM NGƯỢC CỐ ĐỊNH 3 GIÂY để
+           người dùng có thời gian đặt/giữ yên bàn cờ, rồi TỰ ĐỘNG chụp
+           đúng 1 khung hình tại thời điểm hết giờ. Nếu không dò được góc
+           bàn cờ trong khung chụp đó -> báo lỗi, yêu cầu bấm chụp lại.
+       3b) Thu thập toạ độ THỰC từ ảnh vừa chụp: BẮT BUỘC dùng đúng file
+           .npz vừa xuất ra ở Bước 2 (CALIB -> .npz) TRONG CHÍNH CỬA SỔ
+           NÀY để khử méo, rồi suy ra khoảng cách mm/px THẬT từ chính
+           khoảng cách pixel đo được giữa các góc (so với square_size khai
+           báo) để tính toạ độ X/Y mm cho từng điểm. Nếu chưa chạy Bước 2,
+           hệ thống sẽ hỏi người dùng có muốn tiếp tục KHÔNG khử méo hay
+           không (kết quả sẽ kém chính xác hơn).
+       3c) Xuất các toạ độ đã thu thập ra file .csv.
+     Nút xuất CSV chỉ bấm được sau khi đã thu thập toạ độ; nút thu thập
+     chỉ bấm được sau khi đã chụp ảnh chuẩn thành công.
   4) START / STOP      - cho robot tự chạy lần lượt qua các điểm trong
-     CSV để kiểm tra bằng mắt. STOP: dừng vòng lặp rồi về HOME VẬT LÝ
-     (chạm công tắc hành trình, chờ READY từ STM32) - giống các cửa sổ
-     BÀI TOÁN BẬC 4 TĨNH / BÀI TOÁN ĐỘNG BẬC 4.
+     CSV để kiểm tra bằng mắt. Quỹ đạo chuyển động cho bước này được TÁCH
+     RIÊNG hoàn toàn ra module kinematics/board_points_motion.py (mượt,
+     đường thẳng tuyệt đối, không cong). Tại MỖI điểm:
+       1) Đi thẳng, mượt tới (X, Y) ở độ cao Z travel.
+       2) Hạ xuống nhẹ Z down (quy ước trục Z: "+" là đi XUỐNG, "-" là đi
+          LÊN, nên hạ xuống = z_travel + z_down).
+       3) Dừng lại một khoảng "Dwell khi xuống".
+       4) Nâng trở lại lên Z travel.
+       5) Về VỊ TRÍ HOME ĐÃ LƯU (planner.HOME) bằng di chuyển thẳng bình
+          thường - KHÔNG chạm công tắc hành trình, KHÔNG chờ phản hồi
+          READY từ STM32 (để chạy nhanh hơn giữa các điểm).
+     Tốc độ di chuyển ngang (mm/s) chỉnh được bằng thanh trượt kéo trên
+     giao diện, áp dụng ngay cả khi đang chạy.
+
+     STOP (nút "■ STOP AND HOME"): dừng vòng lặp NGAY SAU điểm hiện tại,
+     rồi về HẲN HOME VẬT LÝ (chạm công tắc hành trình, chờ READY từ
+     STM32) - đây là bước an toàn khi người dùng chủ động dừng, KHÁC với
+     bước "về Home đã lưu" (nhanh, không chờ READY) diễn ra tự động sau
+     mỗi điểm trong lúc chạy bình thường.
+
+     TIẾP TỤC SAU KHI STOP (MỚI): các điểm CHƯA kịp chạy tới được GIỮ LẠI
+     trong bộ nhớ của cửa sổ (gắn với đúng file CSV đang dùng). Nếu người
+     dùng bấm lại "▶ START" trong khi vẫn dùng CÙNG file CSV đó, hệ thống
+     sẽ CHẠY TIẾP từ điểm còn dang dở (nối đuôi), KHÔNG đọc lại và chạy
+     lại từ điểm đầu tiên. Chỉ khi nào đã chạy hết TOÀN BỘ điểm, hoặc
+     người dùng đổi sang một file CSV khác, thì lần START kế tiếp mới
+     load lại từ đầu.
 """
 import csv
 import os
@@ -26,29 +63,56 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QGridLayout, QLabel, QPushButton, QLineEdit,
     QSpinBox, QDoubleSpinBox, QGroupBox, QTextEdit, QProgressBar,
-    QFileDialog, QMessageBox, QSizePolicy, QScrollArea, QWidget,
+    QFileDialog, QMessageBox, QSizePolicy, QScrollArea, QWidget, QSlider,
 )
 
 from shared_state import (
     BaseTabWindow, FnWorker, StreamToSignal, cv2_to_qpixmap,
     save_config, home_and_wait,
 )
+from kinematics.board_points_motion import BoardPointsMotionPlanner, MotionError
 
-# Tất cả nút trong cửa sổ này PHẢI màu xanh dương (theo yêu cầu).
-BLUE_BTN_STYLE = """
-QPushButton#blueActionBtn {
-    background-color: #0078d4;
+# Giới hạn / mặc định cho thanh trượt tốc độ (mm/s) của bước 4 (Run Robot).
+RUN_SPEED_MIN = 5
+RUN_SPEED_MAX = 100
+RUN_SPEED_DEFAULT = 30
+
+# Thời gian đếm ngược (giây) trước khi tự động chụp ảnh bàn cờ "chuẩn" ở
+# bước 3a - cố định, không đổi qua GUI.
+REFERENCE_CAPTURE_WAIT_S = 3.0
+
+# Nút hành động thường (Start/Run/Chọn file/...) - màu XANH DƯƠNG.
+GRAY_BTN_STYLE = """
+QPushButton#grayActionBtn {
+    background-color: #1976d2;
     color: #ffffff;
-    border: 2px solid #0a63ad;
+    border: 2px solid #145ea8;
     border-radius: 12px;
     padding: 12px 18px;
     font-weight: 700;
     font-size: 14pt;
     min-height: 40px;
 }
-QPushButton#blueActionBtn:hover { background-color: #106ebe; }
-QPushButton#blueActionBtn:pressed { background-color: #005a9e; }
-QPushButton#blueActionBtn:disabled { background-color: #8fbfe0; border-color: #6ea5cc; color: #eef6fc; }
+QPushButton#grayActionBtn:hover { background-color: #1565c0; }
+QPushButton#grayActionBtn:pressed { background-color: #0d47a1; }
+QPushButton#grayActionBtn:disabled { background-color: #a8c8ec; border-color: #90b8e0; color: #f0f5fb; }
+"""
+
+# Nút DỪNG / HUỶ (Stop / Cancel) - màu XÁM.
+RED_BTN_STYLE = """
+QPushButton#redActionBtn {
+    background-color: #757575;
+    color: #ffffff;
+    border: 2px solid #5a5a5a;
+    border-radius: 12px;
+    padding: 12px 18px;
+    font-weight: 700;
+    font-size: 14pt;
+    min-height: 40px;
+}
+QPushButton#redActionBtn:hover { background-color: #616161; }
+QPushButton#redActionBtn:pressed { background-color: #4d4d4d; }
+QPushButton#redActionBtn:disabled { background-color: #bdbdbd; border-color: #a0a0a0; color: #f0f0f0; }
 """
 
 # Style chung cho các ô nhập liệu / label trong panel bên phải, để chữ to
@@ -84,9 +148,20 @@ QProgressBar {
 
 
 def _make_blue_button(text):
+    """Nút hành động thường - màu XANH DƯƠNG (giữ tên hàm cũ để không phải
+    sửa lại toàn bộ nơi gọi bên dưới)."""
     btn = QPushButton(text)
-    btn.setObjectName("blueActionBtn")
-    btn.setStyleSheet(BLUE_BTN_STYLE)
+    btn.setObjectName("grayActionBtn")
+    btn.setStyleSheet(GRAY_BTN_STYLE)
+    btn.setMinimumHeight(44)
+    return btn
+
+
+def _make_stop_button(text):
+    """Nút DỪNG / HUỶ - màu XÁM."""
+    btn = QPushButton(text)
+    btn.setObjectName("redActionBtn")
+    btn.setStyleSheet(RED_BTN_STYLE)
     btn.setMinimumHeight(44)
     return btn
 
@@ -178,8 +253,102 @@ class ChessboardCaptureThread(QThread):
 
 
 # =====================================================================
+# 1b) THREAD CHỤP 1 ẢNH BÀN CỜ "Ở VỊ TRÍ CHUẨN" (dùng cho bước 3a)
+#
+# Đếm ngược cố định `wait_seconds` giây (mặc định 3s) để người dùng có
+# thời gian đặt/giữ yên bàn cờ, rồi CHỤP ĐÚNG 1 khung hình tại đúng thời
+# điểm hết giờ và thử dò góc bàn cờ trên khung đó. Nếu không dò được góc
+# trong khung chụp đó -> báo lỗi, KHÔNG tự chụp lại.
+# =====================================================================
+class ReferenceBoardCaptureThread(QThread):
+    frame_ready = Signal(object, float)        # display, seconds_left
+    captured = Signal(object, object, tuple)   # raw_frame(BGR), corners, used_size
+    error = Signal(str)
+    stopped = Signal()
+
+    def __init__(self, camera_index, board_w, board_h, wait_seconds=REFERENCE_CAPTURE_WAIT_S):
+        super().__init__()
+        self.camera_index = camera_index
+        self.board_w = board_w
+        self.board_h = board_h
+        self.wait_seconds = wait_seconds
+        self._running = False
+
+    def request_stop(self):
+        self._running = False
+
+    def run(self):
+        cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(self.camera_index)
+        if not cap.isOpened():
+            self.error.emit(f"Không thể mở camera index {self.camera_index}")
+            self.stopped.emit()
+            return
+
+        self._running = True
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+        t_start = time.time()
+
+        try:
+            while self._running:
+                ret, frame = cap.read()
+                if not ret:
+                    self.error.emit("Mất tín hiệu camera.")
+                    break
+
+                elapsed = time.time() - t_start
+                remaining = self.wait_seconds - elapsed
+
+                display = frame.copy()
+
+                if remaining > 0:
+                    cv2.putText(
+                        display, f"Giu yen ban co... chup sau {remaining:.1f}s",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2,
+                    )
+                    self.frame_ready.emit(display, remaining)
+                    continue
+
+                # Đã hết thời gian đếm ngược -> CHỤP NGAY khung hình hiện
+                # tại (chỉ 1 lần duy nhất), rồi dò góc bàn cờ trên đó.
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                found, corners, used_size = find_corners_auto(gray, self.board_w, self.board_h)
+
+                if not found:
+                    cv2.putText(
+                        display, "Khong tim thay ban co trong anh vua chup!",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2,
+                    )
+                    self.frame_ready.emit(display, 0.0)
+                    self.error.emit(
+                        "Đã chụp sau {:.0f}s nhưng không phát hiện được bàn cờ trong ảnh. "
+                        "Hãy đặt lại bàn cờ cho rõ nét và bấm chụp lại.".format(self.wait_seconds)
+                    )
+                    break
+
+                cv2.drawChessboardCorners(display, used_size, corners, found)
+                self.frame_ready.emit(display, 0.0)
+
+                corners_refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+                self.captured.emit(frame, corners_refined, used_size)
+                break
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            cap.release()
+            self.stopped.emit()
+
+
+# =====================================================================
 # 2) HÀM CALIB (Y HỆT LOGIC calib_camera.py) - chạy trong FnWorker (nền)
 # =====================================================================
+def _format_matrix(mat, fmt="{:10.4f}"):
+    """In một ma trận numpy 2D ra dạng chuỗi nhiều dòng, căn cột cho dễ đọc."""
+    lines = []
+    for row in np.atleast_2d(mat):
+        lines.append("[ " + "  ".join(fmt.format(float(v)) for v in row) + " ]")
+    return "\n".join(lines)
+
+
 def run_calibration_task(images_dir, board_w, board_h, square_size, output_path, log_fn):
     import glob
 
@@ -265,6 +434,46 @@ def run_calibration_task(images_dir, board_w, board_h, square_size, output_path,
     else:
         log_fn("Đánh giá: Sai số cao (>1.0 px) - nên chụp thêm ảnh nhiều góc độ hơn.")
 
+    # ---------------------------------------------------------------
+    # HIỂN THỊ ĐẦY ĐỦ MA TRẬN NỘI (INTRINSIC) VÀ MA TRẬN NGOẠI (EXTRINSIC)
+    # ---------------------------------------------------------------
+    log_fn("")
+    log_fn("========== MA TRẬN NỘI (INTRINSIC MATRIX - camera_matrix) ==========")
+    log_fn(_format_matrix(camera_matrix))
+    log_fn(
+        f"(fx={fx:.4f}, fy={fy:.4f}, cx={cx:.4f}, cy={cy:.4f} - đơn vị: pixel)"
+    )
+
+    log_fn("")
+    log_fn("---------- Hệ số méo (Distortion coefficients, dist_coeffs) ----------")
+    dist_flat = dist_coeffs.reshape(-1)
+    dist_names = ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6"]
+    dist_str_parts = []
+    for i, v in enumerate(dist_flat):
+        name = dist_names[i] if i < len(dist_names) else f"d{i}"
+        dist_str_parts.append(f"{name}={v:.6f}")
+    log_fn("  " + ", ".join(dist_str_parts))
+
+    log_fn("")
+    log_fn("========== MA TRẬN NGOẠI (EXTRINSIC MATRIX) THEO TỪNG ẢNH ==========")
+    used_paths = [path for path, shape, corners, size, img in detections if size == best_size]
+    for idx_img, (rvec, tvec) in enumerate(zip(rvecs, tvecs)):
+        img_name = os.path.basename(used_paths[idx_img]) if idx_img < len(used_paths) else f"#{idx_img}"
+        R, _ = cv2.Rodrigues(rvec)
+        # Ma trận ngoại đầy đủ [R | t] (3x4): biến đổi từ hệ toạ độ bàn cờ
+        # (world) sang hệ toạ độ camera.
+        extrinsic_3x4 = np.hstack([R, tvec.reshape(3, 1)])
+        log_fn(f"--- Ảnh: {img_name} ---")
+        log_fn("  Rotation vector (rvec): "
+               + "[ " + "  ".join(f"{float(v):.6f}" for v in rvec.reshape(-1)) + " ]")
+        log_fn("  Rotation matrix (R):")
+        log_fn(_format_matrix(R, fmt="{:9.5f}"))
+        log_fn("  Translation vector (tvec, mm): "
+               + "[ " + "  ".join(f"{float(v):.4f}" for v in tvec.reshape(-1)) + " ]")
+        log_fn("  Ma trận ngoại [R | t] (3x4):")
+        log_fn(_format_matrix(extrinsic_3x4, fmt="{:9.5f}"))
+        log_fn("")
+
     npz_path = f"{output_path}.npz"
     np.savez(
         npz_path, camera_matrix=camera_matrix, dist_coeffs=dist_coeffs,
@@ -286,48 +495,110 @@ def run_calibration_task(images_dir, board_w, board_h, square_size, output_path,
 
 
 # =====================================================================
-# 3) XUẤT LƯỚI TOẠ ĐỘ BÀN CỜ RA CSV (tức thời, không cần thread)
+# 3) THU THẬP TOẠ ĐỘ THỰC TỪ ẢNH BÀN CỜ ĐÃ CHỤP (bước 3b)
+# Khác với bản cũ (lưới toạ độ hoàn toàn lý thuyết dựa trên square_size
+# nhập tay), hàm này ĐO trực tiếp khoảng cách pixel giữa các góc bàn cờ
+# đã phát hiện được trong ảnh chụp thật, suy ra tỉ lệ mm/px THẬT, rồi mới
+# quy đổi sang toạ độ X/Y (mm) - vì vậy phải có ảnh chụp ở "vị trí chuẩn"
+# trước khi gọi hàm này.
 # =====================================================================
-def export_chessboard_csv(csv_path, board_w, board_h, square_size, origin_x, origin_y):
-    """Xuất lưới toạ độ các giao điểm bàn cờ (board_w x board_h góc trong,
-    cách nhau square_size mm), dịch theo gốc (origin_x, origin_y) cho khớp
-    với vị trí đặt bàn cờ thật trên bàn robot."""
+def collect_real_board_coordinates(raw_frame_bgr, corners, used_size, square_size,
+                                    origin_x, origin_y, calib_npz_path=None):
+    bw, bh = used_size
+    corners_px = corners.reshape(-1, 2).astype(np.float64)
+
+    h, w = raw_frame_bgr.shape[:2]
+    fx = fy = 1.0
+    cx, cy = w / 2.0, h / 2.0
+
+    if calib_npz_path and os.path.isfile(calib_npz_path):
+        data = np.load(calib_npz_path)
+        camera_matrix = data["camera_matrix"]
+        dist_coeffs = data["dist_coeffs"]
+        new_camera_matrix, _roi = cv2.getOptimalNewCameraMatrix(
+            camera_matrix, dist_coeffs, (w, h), 0, (w, h)
+        )
+        pts = corners_px.reshape(-1, 1, 2).astype(np.float32)
+        undistorted_pts = cv2.undistortPoints(pts, camera_matrix, dist_coeffs, P=new_camera_matrix)
+        corners_px = undistorted_pts.reshape(-1, 2)
+        fx, fy = new_camera_matrix[0, 0], new_camera_matrix[1, 1]
+        cx, cy = new_camera_matrix[0, 2], new_camera_matrix[1, 2]
+
+    pts_grid = corners_px.reshape(bh, bw, 2)
+
+    # Đo khoảng cách pixel THẬT giữa các góc liền kề (ngang + dọc), rồi suy
+    # ra tỉ lệ mm/px từ chính square_size khai báo -> phản ánh đúng board
+    # thật đang đặt trước camera, không phải lưới lý thuyết.
+    horiz = np.linalg.norm(pts_grid[:, 1:, :] - pts_grid[:, :-1, :], axis=2) if bw > 1 else np.array([])
+    vert = np.linalg.norm(pts_grid[1:, :, :] - pts_grid[:-1, :, :], axis=2) if bh > 1 else np.array([])
+    all_spacing = np.concatenate([horiz.ravel(), vert.ravel()])
+    if all_spacing.size == 0 or float(np.mean(all_spacing)) <= 0:
+        raise RuntimeError("Không đo được khoảng cách pixel giữa các góc bàn cờ.")
+
+    avg_px_spacing = float(np.mean(all_spacing))
+    scale_mm_per_px = square_size / avg_px_spacing
+
+    # ĐIỂM NEO (anchor): dùng chính GÓC BÀN CỜ SỐ 0 (góc đầu tiên phát hiện
+    # được, tức pts_grid[0, 0] - cũng là điểm có index=0 trong CSV xuất ra)
+    # làm gốc quy đổi, KHÔNG dùng tâm ảnh (cx, cy) như trước nữa.
+    anchor_px, anchor_py = pts_grid[0, 0]
+
     rows = []
     idx = 0
-    for j in range(board_h):
-        for i in range(board_w):
-            x_mm = origin_x + i * square_size
-            y_mm = origin_y + j * square_size
+    for j in range(bh):
+        for i in range(bw):
+            px, py = pts_grid[j, i]
+            # Cùng quy ước trục với Cameracircle.py: X hướng ngược pixel,
+            # Y hướng lên trên so với điểm neo (đã khử méo nếu có calib).
+            dx_px = -(px - anchor_px)
+            dy_px = (anchor_py - py)
+            x_mm = origin_x + dx_px * scale_mm_per_px
+            y_mm = origin_y + dy_px * scale_mm_per_px
             rows.append((idx, x_mm, y_mm))
             idx += 1
 
+    return rows, scale_mm_per_px, avg_px_spacing
+
+
+def write_points_csv(csv_path, rows):
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["index", "x_mm", "y_mm"])
         writer.writerows(rows)
 
-    return rows
-
 
 # =====================================================================
 # 4) THREAD CHO ROBOT CHẠY QUA TỪNG ĐIỂM TRONG CSV
+#
+# Toàn bộ nội suy chuyển động (đi thẳng - hạ nhẹ - nâng lại - về vị trí
+# Home ĐÃ LƯU) được TÁCH RIÊNG ra kinematics/board_points_motion.py
+# (BoardPointsMotionPlanner). Thread này chỉ điều phối vòng lặp qua danh
+# sách điểm ĐƯỢC GIAO (có thể là toàn bộ CSV, hoặc chỉ phần CÒN LẠI khi
+# tiếp tục sau STOP) và phát tín hiệu log/tiến trình cho GUI.
+#
+# `finished_err` giờ mang thêm số điểm ĐÃ hoàn tất trước khi lỗi xảy ra
+# (completed), để cửa sổ chính vẫn tính đúng được phần còn lại cần chạy
+# tiếp, thay vì mất dấu tiến trình khi có lỗi giữa chừng.
 # =====================================================================
 class RunPointsThread(QThread):
     log_line = Signal(str)
-    progress = Signal(int, int)     # (điểm hiện tại, tổng số điểm)
-    finished_ok = Signal(int)
-    finished_err = Signal(str)
+    progress = Signal(int, int)     # (điểm hiện tại - trong danh sách được giao, tổng số điểm được giao)
+    finished_ok = Signal(int)       # số điểm đã hoàn tất trong danh sách được giao
+    finished_err = Signal(str, int)  # (thông báo lỗi, số điểm đã hoàn tất trước khi lỗi)
 
-    def __init__(self, ctx, points, z_travel, dwell_s=1.0):
+    def __init__(self, motion, points, z_travel, z_down=0.0, dwell_s=1.0, dwell_down_s=1.0):
         super().__init__()
-        self.ctx = ctx
-        self.points = points
+        self.motion = motion              # BoardPointsMotionPlanner (đã tạo sẵn ở GUI thread)
+        self.points = points              # danh sách điểm SẼ CHẠY trong lần này (có thể là phần còn lại)
         self.z_travel = z_travel
+        self.z_down = z_down              # khoảng cách hạ thêm xuống (mm), "+" là xuống
         self.dwell_s = dwell_s
+        self.dwell_down_s = dwell_down_s  # thời gian dừng lại khi đã ở dưới đáy
         self._stop_requested = False
 
     def request_stop(self):
         self._stop_requested = True
+        self.motion.stop()
 
     def run(self):
         import sys
@@ -335,27 +606,41 @@ class RunPointsThread(QThread):
         sys.stdout = StreamToSignal(self.log_line.emit)
         completed = 0
         try:
-            planner = self.ctx.planner
             total = len(self.points)
+
             for i, (x_mm, y_mm) in enumerate(self.points, 1):
                 if self._stop_requested:
                     self.log_line.emit(f"[DỪNG] Người dùng yêu cầu dừng trước điểm {i}/{total}.")
                     break
 
                 self.log_line.emit(f"--- Điểm {i}/{total}: ({x_mm:.1f}, {y_mm:.1f}) ---")
-                planner._move_or_raise(x_mm, y_mm, self.z_travel, planner.TIME_MOVE_FAST)
-                time.sleep(self.dwell_s)
+
+                ok = self.motion.visit_point(
+                    x_mm, y_mm,
+                    z_travel=self.z_travel,
+                    z_down=self.z_down,
+                    dwell_down_s=self.dwell_down_s,
+                )
+                if not ok:
+                    self.log_line.emit(f"[DỪNG] Đã dừng giữa chừng tại điểm {i}/{total}.")
+                    break
+
+                # Không còn "Home vật lý" cho từng điểm - chỉ là di chuyển
+                # thẳng về toạ độ Home đã lưu, không chờ READY từ STM32.
+                self.log_line.emit(f"    ✔ Đã về vị trí Home đã lưu sau điểm {i}/{total}.")
 
                 completed = i
                 self.progress.emit(i, total)
 
+                time.sleep(self.dwell_s)
+
                 if self._stop_requested:
-                    self.log_line.emit(f"[DỪNG] Đã dừng sau khi tới điểm {i}/{total}.")
+                    self.log_line.emit(f"[DỪNG] Đã dừng sau khi hoàn tất điểm {i}/{total}.")
                     break
 
             self.finished_ok.emit(completed)
-        except Exception as e:
-            self.finished_err.emit(str(e))
+        except (MotionError, Exception) as e:
+            self.finished_err.emit(str(e), completed)
         finally:
             sys.stdout = old_stdout
 
@@ -367,8 +652,32 @@ class BoardCalibWindow(BaseTabWindow):
     def __init__(self, ctx, launcher):
         super().__init__(ctx, launcher, "🏁 HIỆU CHỈNH CAMERA BẰNG BÀN CỜ")
         self._capture_thread = None
+        self._ref_capture_thread = None
         self._run_thread = None
-        self._last_csv_points = []
+        self._active_motion = None   # BoardPointsMotionPlanner đang chạy (nếu có)
+
+        # Trạng thái cho quy trình 3 bước (3a chụp -> 3b thu thập -> 3c xuất)
+        self._captured_frame = None
+        self._captured_corners = None
+        self._captured_board_size = None
+        self._collected_rows = None
+
+        # ---- Trạng thái TIẾP TỤC (resume) cho bước 4 (Run Robot) ----
+        # Toàn bộ danh sách điểm đã load từ CSV cho "phiên chạy" hiện tại,
+        # cùng đường dẫn CSV tương ứng và số điểm ĐÃ hoàn tất (đã về Home
+        # đã lưu). Khi bấm START lần nữa với CÙNG file CSV này, nếu vẫn
+        # còn điểm chưa chạy -> chạy tiếp từ điểm kế tiếp (không load lại
+        # từ đầu). Nếu đổi CSV khác hoặc đã chạy hết -> load lại từ đầu.
+        self._csv_points_cache = None
+        self._csv_points_path = None
+        self._points_done_count = 0
+
+        # Thông tin của LẦN CHẠY hiện tại (dùng để quy đổi tiến trình
+        # tương đối trong RunPointsThread về tiến trình tuyệt đối trên
+        # progress bar, và để cập nhật lại _points_done_count khi xong).
+        self._run_start_index = 0
+        self._run_total_points = 0
+
         self._build_ui()
 
     # ---------------- UI ----------------
@@ -404,7 +713,7 @@ class BoardCalibWindow(BaseTabWindow):
         cfg = self.ctx.cfg
 
         # ---- 1) CHỤP ẢNH BÀN CỜ ----
-        g1 = QGroupBox("1) CHỤP ẢNH BÀN CỜ")
+        g1 = QGroupBox("1) CHỤP ẢNH")
         g1.setObjectName("compactBox")
         l1 = QGridLayout(g1)
         l1.setVerticalSpacing(10)
@@ -417,20 +726,20 @@ class BoardCalibWindow(BaseTabWindow):
         self.spin_num_images.setValue(int(cfg.get("board_capture_count", 30)))
         self.edit_images_dir = QLineEdit(cfg.get("board_images_dir", "images"))
 
-        l1.addWidget(QLabel("Số góc trong W:"), 0, 0); l1.addWidget(self.spin_board_w, 0, 1)
-        l1.addWidget(QLabel("Số góc trong H:"), 1, 0); l1.addWidget(self.spin_board_h, 1, 1)
-        l1.addWidget(QLabel("Số ảnh cần chụp:"), 2, 0); l1.addWidget(self.spin_num_images, 2, 1)
-        l1.addWidget(QLabel("Thư mục lưu:"), 3, 0); l1.addWidget(self.edit_images_dir, 3, 1)
+        l1.addWidget(QLabel("W:"), 0, 0); l1.addWidget(self.spin_board_w, 0, 1)
+        l1.addWidget(QLabel("H:"), 1, 0); l1.addWidget(self.spin_board_h, 1, 1)
+        l1.addWidget(QLabel("SỐ ẢNH CẦN CHỤP:"), 2, 0); l1.addWidget(self.spin_num_images, 2, 1)
+        l1.addWidget(QLabel("THƯ MỤC:"), 3, 0); l1.addWidget(self.edit_images_dir, 3, 1)
 
         self.progress_capture = QProgressBar()
-        self.progress_capture.setFormat("0/%d ảnh" % self.spin_num_images.value())
+        self.progress_capture.setFormat("0/%d ẢNH" % self.spin_num_images.value())
         l1.addWidget(self.progress_capture, 4, 0, 1, 2)
 
         cap_btn_row = QVBoxLayout()
         cap_btn_row.setSpacing(8)
-        self.btn_capture_start = _make_blue_button("▶ BẮT ĐẦU CHỤP")
+        self.btn_capture_start = _make_blue_button("▶ BẮT ĐẦU")
         self.btn_capture_start.clicked.connect(self.on_start_capture)
-        self.btn_capture_stop = _make_blue_button("■ DỪNG CHỤP")
+        self.btn_capture_stop = _make_stop_button("■ DỪNG")
         self.btn_capture_stop.clicked.connect(self.on_stop_capture)
         self.btn_capture_stop.setEnabled(False)
         cap_btn_row.addWidget(self.btn_capture_start)
@@ -440,7 +749,7 @@ class BoardCalibWindow(BaseTabWindow):
         ctrl_col.addWidget(g1)
 
         # ---- 2) CALIB -> .npz ----
-        g2 = QGroupBox("2) CALIB CAMERA -> .npz")
+        g2 = QGroupBox("2) HIỆU CHỈNH CAMERA -> .NPZ")
         g2.setObjectName("compactBox")
         l2 = QGridLayout(g2)
         l2.setVerticalSpacing(10)
@@ -450,17 +759,17 @@ class BoardCalibWindow(BaseTabWindow):
         self.spin_square_size.setValue(float(cfg.get("board_square_size", 9.96)))
         self.edit_output_name = QLineEdit(cfg.get("board_calib_output", "calibration_result"))
 
-        l2.addWidget(QLabel("Kích thước ô vuông (mm):"), 0, 0); l2.addWidget(self.spin_square_size, 0, 1)
-        l2.addWidget(QLabel("Tên file output:"), 1, 0); l2.addWidget(self.edit_output_name, 1, 1)
+        l2.addWidget(QLabel("KÍCH THƯỚC Ô VUÔNG (mm):"), 0, 0); l2.addWidget(self.spin_square_size, 0, 1)
+        l2.addWidget(QLabel("TỆP XUẤT:"), 1, 0); l2.addWidget(self.edit_output_name, 1, 1)
 
-        self.btn_calib_run = _make_blue_button("▶ CHẠY CALIB")
+        self.btn_calib_run = _make_blue_button("▶ CHẠY HIỆU CHỈNH")
         self.btn_calib_run.clicked.connect(self.on_run_calibration)
         l2.addWidget(self.btn_calib_run, 2, 0, 1, 2)
 
         ctrl_col.addWidget(g2)
 
-        # ---- 3) XUẤT TOẠ ĐỘ .csv ----
-        g3 = QGroupBox("3) XUẤT TOẠ ĐỘ LƯỚI BÀN CỜ -> .csv")
+        # ---- 3) CHỤP CHUẨN -> THU THẬP TOẠ ĐỘ -> XUẤT .csv ----
+        g3 = QGroupBox("3) ẢNH CHUẨN → THU THẬP TỌA ĐỘ → XUẤT CSV")
         g3.setObjectName("compactBox")
         l3 = QGridLayout(g3)
         l3.setVerticalSpacing(10)
@@ -470,54 +779,106 @@ class BoardCalibWindow(BaseTabWindow):
         self.spin_origin_y = QDoubleSpinBox(); self.spin_origin_y.setRange(-1000, 1000)
         self.spin_origin_y.setValue(float(cfg.get("board_origin_y", 0.0)))
         self.edit_csv_path = QLineEdit(cfg.get("board_csv_path", "board_points.csv"))
-        btn_browse_csv_save = _make_blue_button("Chọn nơi lưu...")
+        btn_browse_csv_save = _make_blue_button(" CHỌN NƠI LƯU")
         btn_browse_csv_save.clicked.connect(self.on_browse_csv_save)
 
-        l3.addWidget(QLabel("Gốc X (mm):"), 0, 0); l3.addWidget(self.spin_origin_x, 0, 1)
-        l3.addWidget(QLabel("Gốc Y (mm):"), 1, 0); l3.addWidget(self.spin_origin_y, 1, 1)
-        l3.addWidget(QLabel("File CSV:"), 2, 0); l3.addWidget(self.edit_csv_path, 2, 1)
+        l3.addWidget(QLabel("Xo (mm):"), 0, 0); l3.addWidget(self.spin_origin_x, 0, 1)
+        l3.addWidget(QLabel("Yo (mm):"), 1, 0); l3.addWidget(self.spin_origin_y, 1, 1)
+        l3.addWidget(QLabel("TỆP CSV:"), 2, 0); l3.addWidget(self.edit_csv_path, 2, 1)
         l3.addWidget(btn_browse_csv_save, 3, 0, 1, 2)
 
-        self.btn_export_csv = _make_blue_button("▶ XUẤT CSV")
+        self.lbl_step_status = QLabel("BƯỚC 1/3: CHƯA CHỤP ẢNH.")
+        self.lbl_step_status.setWordWrap(True)
+        self.lbl_step_status.setStyleSheet("color:#333333; font-weight:600;")
+        l3.addWidget(self.lbl_step_status, 4, 0, 1, 2)
+
+        self.btn_capture_ref = _make_blue_button("📷 1. CHỤP ẢNH CHUẨN")
+        self.btn_capture_ref.clicked.connect(self.on_capture_reference)
+        l3.addWidget(self.btn_capture_ref, 5, 0, 1, 2)
+
+        self.btn_cancel_ref = _make_stop_button("■ HỦY CHỤP")
+        self.btn_cancel_ref.clicked.connect(self.on_cancel_reference)
+        self.btn_cancel_ref.setEnabled(False)
+        l3.addWidget(self.btn_cancel_ref, 6, 0, 1, 2)
+
+        self.btn_collect_coords = _make_blue_button("📐 2. THU THẬP TỌA ĐỘ")
+        self.btn_collect_coords.clicked.connect(self.on_collect_coordinates)
+        self.btn_collect_coords.setEnabled(False)
+        l3.addWidget(self.btn_collect_coords, 7, 0, 1, 2)
+
+        self.btn_export_csv = _make_blue_button("💾 3. XUẤT CSV")
         self.btn_export_csv.clicked.connect(self.on_export_csv)
-        l3.addWidget(self.btn_export_csv, 4, 0, 1, 2)
+        self.btn_export_csv.setEnabled(False)
+        l3.addWidget(self.btn_export_csv, 8, 0, 1, 2)
 
         ctrl_col.addWidget(g3)
 
         # ---- 4) CHẠY ROBOT QUA CÁC ĐIỂM CSV ----
-        g4 = QGroupBox("4) CHẠY ROBOT QUA CÁC ĐIỂM (CSV)")
+        g4 = QGroupBox("4) CHẠY ROBOT (CSV)")
         g4.setObjectName("compactBox")
         l4 = QGridLayout(g4)
         l4.setVerticalSpacing(10)
         l4.setHorizontalSpacing(10)
         self.edit_run_csv_path = QLineEdit(cfg.get("board_csv_path", "board_points.csv"))
-        btn_browse_csv_load = _make_blue_button("Chọn file CSV...")
+        btn_browse_csv_load = _make_blue_button("CHỌN TỆP CSV...")
         btn_browse_csv_load.clicked.connect(self.on_browse_csv_load)
-        self.spin_z_travel = QDoubleSpinBox(); self.spin_z_travel.setRange(0, 500)
+
+        self.spin_z_travel = QDoubleSpinBox(); self.spin_z_travel.setRange(-500, 500)
         self.spin_z_travel.setValue(float(cfg.get("board_z_travel", 300.0)))
+
+        # Z down: khoảng cách hạ THÊM xuống tại mỗi điểm, quy ước "+" là
+        # đi XUỐNG. Đặt = 0 để tắt tính năng này (giữ hành vi cũ).
+        self.spin_z_down = QDoubleSpinBox(); self.spin_z_down.setRange(0, 500)
+        self.spin_z_down.setValue(float(cfg.get("board_z_down", 0.0)))
+
+        # Thời gian dừng lại khi đã ở dưới đáy (z_travel + z_down), trước
+        # khi nâng lên lại. Chỉ có tác dụng khi Z down > 0.
+        self.spin_dwell_down = QDoubleSpinBox(); self.spin_dwell_down.setRange(0.0, 10.0)
+        self.spin_dwell_down.setSingleStep(0.5)
+        self.spin_dwell_down.setValue(float(cfg.get("board_dwell_down_s", 1.0)))
+
         self.spin_dwell = QDoubleSpinBox(); self.spin_dwell.setRange(0.0, 10.0)
         self.spin_dwell.setSingleStep(0.5)
         self.spin_dwell.setValue(float(cfg.get("board_dwell_s", 1.0)))
 
-        l4.addWidget(QLabel("File CSV:"), 0, 0); l4.addWidget(self.edit_run_csv_path, 0, 1)
+        l4.addWidget(QLabel("TỆP CSV:"), 0, 0); l4.addWidget(self.edit_run_csv_path, 0, 1)
         l4.addWidget(btn_browse_csv_load, 1, 0, 1, 2)
-        l4.addWidget(QLabel("Z di chuyển (mm):"), 2, 0); l4.addWidget(self.spin_z_travel, 2, 1)
-        l4.addWidget(QLabel("Dừng tại mỗi điểm (s):"), 3, 0); l4.addWidget(self.spin_dwell, 3, 1)
+        l4.addWidget(QLabel("Z DI CHUYỂN (mm):"), 2, 0); l4.addWidget(self.spin_z_travel, 2, 1)
+        l4.addWidget(QLabel("Z HẠ (mm, + LÀ XUỐNG):"), 3, 0); l4.addWidget(self.spin_z_down, 3, 1)
+        l4.addWidget(QLabel("THỜI GIAN DỪNG KHI XUỐNG (s):"), 4, 0); l4.addWidget(self.spin_dwell_down, 4, 1)
+        l4.addWidget(QLabel("THỜI GIAN TRỄ MỖI ĐIỂM (s):"), 5, 0); l4.addWidget(self.spin_dwell, 5, 1)
+
+        # ---- Thanh trượt tốc độ di chuyển (mm/s), kéo được ----
+        l4.addWidget(QLabel("TỐC ĐỘ DI CHUYỂN (mm/s):"), 6, 0, 1, 2)
+        self.slider_run_speed = QSlider(Qt.Horizontal)
+        self.slider_run_speed.setObjectName("boardRunSpeedSlider")
+        self.slider_run_speed.setMinimum(RUN_SPEED_MIN)
+        self.slider_run_speed.setMaximum(RUN_SPEED_MAX)
+        self.slider_run_speed.setValue(int(cfg.get("board_run_speed", RUN_SPEED_DEFAULT)))
+        self.slider_run_speed.setTickPosition(QSlider.TicksBelow)
+        self.slider_run_speed.setTickInterval(10)
+        self.slider_run_speed.valueChanged.connect(self._on_run_speed_changed)
+        l4.addWidget(self.slider_run_speed, 7, 0, 1, 2)
+
+        self.lbl_run_speed_value = QLabel(f"{self.slider_run_speed.value()} mm/s")
+        self.lbl_run_speed_value.setAlignment(Qt.AlignCenter)
+        self.lbl_run_speed_value.setStyleSheet("font-size:12pt; font-weight:600; color:#0a5b8a;")
+        l4.addWidget(self.lbl_run_speed_value, 8, 0, 1, 2)
 
         self.progress_run = QProgressBar()
-        self.progress_run.setFormat("Sẵn sàng")
-        l4.addWidget(self.progress_run, 4, 0, 1, 2)
+        self.progress_run.setFormat("SẴN SÀNG")
+        l4.addWidget(self.progress_run, 9, 0, 1, 2)
 
         run_btn_row = QVBoxLayout()
         run_btn_row.setSpacing(8)
-        self.btn_run_start = _make_blue_button("▶ START")
+        self.btn_run_start = _make_blue_button("▶ BẮT ĐẦU")
         self.btn_run_start.clicked.connect(self.on_run_start)
-        self.btn_run_stop = _make_blue_button("■ STOP (VỀ HOME)")
+        self.btn_run_stop = _make_stop_button("■ DỪNG VÀ VỀ HOME")
         self.btn_run_stop.clicked.connect(self.on_run_stop)
         self.btn_run_stop.setEnabled(False)
         run_btn_row.addWidget(self.btn_run_start)
         run_btn_row.addWidget(self.btn_run_stop)
-        l4.addLayout(run_btn_row, 5, 0, 1, 2)
+        l4.addLayout(run_btn_row, 10, 0, 1, 2)
 
         ctrl_col.addWidget(g4)
         ctrl_col.addStretch()
@@ -548,14 +909,35 @@ class BoardCalibWindow(BaseTabWindow):
         cfg["board_origin_y"] = self.spin_origin_y.value()
         cfg["board_csv_path"] = self.edit_csv_path.text()
         cfg["board_z_travel"] = self.spin_z_travel.value()
+        cfg["board_z_down"] = self.spin_z_down.value()
+        cfg["board_dwell_down_s"] = self.spin_dwell_down.value()
         cfg["board_dwell_s"] = self.spin_dwell.value()
+        cfg["board_run_speed"] = self.slider_run_speed.value()
         save_config(cfg)
+
+    def _any_camera_busy(self):
+        return (
+            self.ctx.camera_thread is not None
+            or self.ctx.dynamic_camera_thread is not None
+            or self._capture_thread is not None
+            or self._ref_capture_thread is not None
+        )
+
+    # ---------------- Tốc độ di chuyển (bước 4) ----------------
+    def _on_run_speed_changed(self, value):
+        self.lbl_run_speed_value.setText(f"{value} mm/s")
+        if self._active_motion is not None:
+            # An toàn để chỉnh ngay cả khi đang chạy - chỉ áp dụng cho
+            # đoạn di chuyển tiếp theo, không ngắt chuyển động hiện tại.
+            self._active_motion.set_speed(value)
+        self.ctx.cfg["board_run_speed"] = value
+        save_config(self.ctx.cfg)
 
     # ---------------- 1) Chụp ảnh ----------------
     def on_start_capture(self):
         if self._capture_thread is not None:
             return
-        if self.ctx.camera_thread is not None or self.ctx.dynamic_camera_thread is not None:
+        if self._any_camera_busy():
             QMessageBox.warning(self, "Đang chạy tab khác",
                                  "Một tab camera khác đang mở - hãy đóng trước.")
             return
@@ -564,7 +946,7 @@ class BoardCalibWindow(BaseTabWindow):
         target = self.spin_num_images.value()
         self.progress_capture.setRange(0, target)
         self.progress_capture.setValue(0)
-        self.progress_capture.setFormat(f"0/{target} ảnh")
+        self.progress_capture.setFormat(f"0/{target} ẢNH")
         self.log_view.clear()
         self.btn_capture_start.setEnabled(False)
         self.btn_capture_stop.setEnabled(True)
@@ -593,7 +975,7 @@ class BoardCalibWindow(BaseTabWindow):
                        Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
         self.progress_capture.setValue(saved_count)
-        self.progress_capture.setFormat(f"{saved_count}/{self.spin_num_images.value()} ảnh")
+        self.progress_capture.setFormat(f"{saved_count}/{self.spin_num_images.value()} ẢNH")
 
     def _on_capture_error(self, msg):
         self._append_log(f"⚠ {msg}")
@@ -636,26 +1018,170 @@ class BoardCalibWindow(BaseTabWindow):
         self._append_log(f"⚠ LỖI CALIB: {err}")
         QMessageBox.critical(self, "Lỗi Calib", err)
 
-    # ---------------- 3) Xuất CSV ----------------
+    # ---------------- 3a) Chụp ảnh bàn cờ ở vị trí chuẩn ----------------
     def on_browse_csv_save(self):
         path, _ = QFileDialog.getSaveFileName(self, "Chọn nơi lưu CSV", self.edit_csv_path.text(), "CSV (*.csv)")
         if path:
             self.edit_csv_path.setText(path)
 
-    def on_export_csv(self):
+    def on_capture_reference(self):
+        if self._ref_capture_thread is not None:
+            return
+        if self._any_camera_busy():
+            QMessageBox.warning(self, "Đang chạy tab khác",
+                                 "Một tác vụ camera khác đang mở - hãy dừng trước.")
+            return
+
         self._save_cfg()
+
+        # Chụp ảnh mới -> mọi kết quả thu thập/xuất cũ trước đó không còn
+        # hợp lệ, phải làm lại từ đầu theo đúng thứ tự 1 -> 2 -> 3.
+        self._captured_frame = None
+        self._captured_corners = None
+        self._captured_board_size = None
+        self._collected_rows = None
+        self.btn_collect_coords.setEnabled(False)
+        self.btn_export_csv.setEnabled(False)
+
+        self.lbl_step_status.setText(
+            f"BƯỚC 1/3: GIỮ YÊN BÀN CỜ - SẼ TỰ ĐỘNG CHỤP SAU {REFERENCE_CAPTURE_WAIT_S:.1f}S..."
+        )
+        self._append_log(
+            f"=== BƯỚC 1: Đặt bàn cờ ở vị trí chuẩn và giữ yên trong {REFERENCE_CAPTURE_WAIT_S:.0f}s tới lúc tự chụp ==="
+        )
+        self.btn_capture_ref.setEnabled(False)
+        self.btn_cancel_ref.setEnabled(True)
+
+        self._ref_capture_thread = ReferenceBoardCaptureThread(
+            camera_index=self.ctx.cfg.get("camera_index", 0),
+            board_w=self.spin_board_w.value(),
+            board_h=self.spin_board_h.value(),
+            wait_seconds=REFERENCE_CAPTURE_WAIT_S,
+        )
+        self._ref_capture_thread.frame_ready.connect(self._on_ref_frame)
+        self._ref_capture_thread.captured.connect(self._on_ref_captured)
+        self._ref_capture_thread.error.connect(self._on_ref_error)
+        self._ref_capture_thread.stopped.connect(self._on_ref_stopped)
+        self._ref_capture_thread.start()
+
+    def on_cancel_reference(self):
+        if self._ref_capture_thread is not None:
+            self._ref_capture_thread.request_stop()
+
+    def _on_ref_frame(self, frame, seconds_left):
+        pix = cv2_to_qpixmap(frame)
+        self.video_label.setPixmap(
+            pix.scaled(self.video_label.width(), self.video_label.height(),
+                       Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
+        if seconds_left > 0:
+            self.lbl_step_status.setText(
+                f"BƯỚC 1/3: GIỮ YÊN BÀN CỜ - SẼ TỰ ĐỘNG CHỤP SAU {seconds_left:.1f}S..."
+            )
+
+    def _on_ref_captured(self, raw_frame, corners, used_size):
+        self._captured_frame = raw_frame
+        self._captured_corners = corners
+        self._captured_board_size = used_size
+        self.lbl_step_status.setText(
+            f"BƯỚC 1/3 HOÀN TẤT: ĐÃ CHỤP BÀN CỜ {used_size[0]}x{used_size[1]}. "
+            f"TIẾP TỤC BƯỚC 2."
+        )
+        self._append_log(
+            f"✔ BƯỚC 1 xong: đã chụp bàn cờ {used_size[0]}x{used_size[1]} ở vị trí chuẩn (sau {REFERENCE_CAPTURE_WAIT_S:.0f}s)."
+        )
+        self.btn_collect_coords.setEnabled(True)
+
+    def _on_ref_error(self, msg):
+        self._append_log(f"⚠ {msg}")
+        QMessageBox.warning(self, "Chưa chụp được ảnh chuẩn", msg)
+
+    def _on_ref_stopped(self):
+        self._ref_capture_thread = None
+        self.btn_capture_ref.setEnabled(True)
+        self.btn_cancel_ref.setEnabled(False)
+        if self._captured_corners is None:
+            self.video_label.setText("Camera đã dừng")
+            self.lbl_step_status.setText("BƯỚC 1/3: CHƯA CHỤP ẢNH.")
+
+    # ---------------- 3b) Thu thập toạ độ thực từ ảnh đã chụp ----------------
+    def on_collect_coordinates(self):
+        if self._captured_corners is None or self._captured_frame is None:
+            QMessageBox.warning(
+                self, "Chưa có ảnh chuẩn",
+                "Hãy thực hiện Bước 1 (chụp ảnh bàn cờ ở vị trí chuẩn) trước.",
+            )
+            return
+
+        self._save_cfg()
+
+        # BẮT BUỘC dùng đúng file calib.npz vừa xuất ra từ Bước 2
+        # (CALIB -> .npz) TRONG CHÍNH CỬA SỔ NÀY - KHÔNG âm thầm rơi về
+        # ctx.cfg["calib_file"] (file calib mặc định chung của app).
+        calib_npz_path = f"{self.edit_output_name.text()}.npz"
+        if not os.path.isfile(calib_npz_path):
+            reply = QMessageBox.question(
+                self, "Chưa có file CALIB",
+                f"Không tìm thấy file '{calib_npz_path}'.\n"
+                f"Hãy chạy Bước 2 (CALIB -> .npz) trước để có kết quả chính xác nhất.\n\n"
+                f"Bạn có muốn tiếp tục thu thập toạ độ KHÔNG khử méo ống kính "
+                f"(kém chính xác hơn) không?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            calib_npz_path = None
+            self._append_log(
+                "⚠ Chưa có file CALIB của Bước 2 - thu thập toạ độ KHÔNG khử méo ống kính."
+            )
+        else:
+            self._append_log(f"Dùng file CALIB (Bước 2): {calib_npz_path}")
+
         try:
-            rows = export_chessboard_csv(
-                self.edit_csv_path.text(),
-                self.spin_board_w.value(),
-                self.spin_board_h.value(),
+            rows, scale_mm_per_px, avg_px_spacing = collect_real_board_coordinates(
+                self._captured_frame,
+                self._captured_corners,
+                self._captured_board_size,
                 self.spin_square_size.value(),
                 self.spin_origin_x.value(),
                 self.spin_origin_y.value(),
+                calib_npz_path=calib_npz_path,
             )
-            self._last_csv_points = [(r[1], r[2]) for r in rows]
-            self.edit_run_csv_path.setText(self.edit_csv_path.text())
-            self._append_log(f"✔ HOÀN TẤT (Done): đã xuất {len(rows)} điểm vào '{self.edit_csv_path.text()}'.")
+        except Exception as e:
+            self._append_log(f"⚠ LỖI khi thu thập tọa độ: {e}")
+            QMessageBox.critical(self, "Lỗi thu thập tọa độ", str(e))
+            return
+
+        self._collected_rows = rows
+        self.lbl_step_status.setText(
+            f"BƯỚC 2/3 HOÀN TẤT: ĐÃ THU THẬP {len(rows)} ĐIỂM "
+            f"(TỶ LỆ ≈ {scale_mm_per_px:.4f} mm/px). TIẾP TỤC BƯỚC 3."
+        )
+        self._append_log(
+            f"✔ BƯỚC 2 xong: thu thập {len(rows)} toạ độ từ ảnh chụp thật "
+            f"(tỉ lệ đo được ≈ {scale_mm_per_px:.4f} mm/px, khoảng cách ô "
+            f"trung bình ≈ {avg_px_spacing:.1f}px)."
+        )
+        self.btn_export_csv.setEnabled(True)
+
+    # ---------------- 3c) Xuất CSV ----------------
+    def on_export_csv(self):
+        if not self._collected_rows:
+            QMessageBox.warning(
+                self, "Chưa có tọa độ",
+                "Hãy thực hiện Bước 1 (chụp ảnh chuẩn) và Bước 2 (thu thập tọa độ) trước khi xuất CSV.",
+            )
+            return
+
+        self._save_cfg()
+        path = self.edit_csv_path.text()
+        try:
+            write_points_csv(path, self._collected_rows)
+            self.edit_run_csv_path.setText(path)
+            self.lbl_step_status.setText(f"BƯỚC 3/3 HOÀN TẤT: ĐÃ XUẤT {len(self._collected_rows)} ĐIỂM.")
+            self._append_log(
+                f"✔ BƯỚC 3 xong: đã xuất {len(self._collected_rows)} điểm vào '{path}'."
+            )
         except Exception as e:
             self._append_log(f"⚠ LỖI xuất CSV: {e}")
             QMessageBox.critical(self, "Lỗi xuất CSV", str(e))
@@ -694,29 +1220,80 @@ class BoardCalibWindow(BaseTabWindow):
             QMessageBox.warning(self, "Không tìm thấy file", f"Không tìm thấy file CSV: {csv_path}")
             return
 
-        try:
-            points = self._load_points_from_csv(csv_path)
-        except Exception as e:
-            QMessageBox.critical(self, "Lỗi đọc CSV", str(e))
-            return
-        if not points:
-            QMessageBox.warning(self, "File rỗng", "File CSV không có điểm nào.")
+        # ---- Quyết định: TIẾP TỤC (resume) hay LOAD LẠI TỪ ĐẦU ----
+        # Chỉ resume khi: (a) đã có cache của đúng file CSV này, và
+        # (b) cache đó CHƯA chạy hết (còn điểm dở dang). Ngược lại (đổi
+        # CSV khác, hoặc lần trước đã hoàn tất toàn bộ) -> đọc lại từ đầu.
+        can_resume = (
+            self._csv_points_cache is not None
+            and self._csv_points_path == csv_path
+            and 0 < self._points_done_count < len(self._csv_points_cache)
+        )
+
+        if can_resume:
+            points_all = self._csv_points_cache
+            start_index = self._points_done_count
+            self._append_log(
+                f"↪ TIẾP TỤC: đã hoàn tất {start_index}/{len(points_all)} điểm trước đó - "
+                f"chạy tiếp từ điểm {start_index + 1}."
+            )
+        else:
+            try:
+                points_all = self._load_points_from_csv(csv_path)
+            except Exception as e:
+                QMessageBox.critical(self, "Lỗi đọc CSV", str(e))
+                return
+            if not points_all:
+                QMessageBox.warning(self, "File rỗng", "File CSV không có điểm nào.")
+                return
+
+            self._csv_points_cache = points_all
+            self._csv_points_path = csv_path
+            self._points_done_count = 0
+            start_index = 0
+            self.log_view.clear()
+
+        points_to_run = points_all[start_index:]
+        if not points_to_run:
+            QMessageBox.information(
+                self, "Đã chạy xong",
+                "File CSV này đã được chạy hết toàn bộ điểm rồi.\n"
+                "Bấm lại START để chạy lại từ đầu, hoặc chọn file CSV khác.",
+            )
+            # Cho phép lần bấm START kế tiếp load lại từ đầu.
+            self._csv_points_cache = None
+            self._csv_points_path = None
+            self._points_done_count = 0
             return
 
         self._save_cfg()
-        self.log_view.clear()
-        self.progress_run.setRange(0, len(points))
-        self.progress_run.setValue(0)
-        self.progress_run.setFormat(f"0/{len(points)}")
+        self.progress_run.setRange(0, len(points_all))
+        self.progress_run.setValue(start_index)
+        self.progress_run.setFormat(f"{start_index}/{len(points_all)}")
 
         self.ctx.busy = True
         self.btn_run_start.setEnabled(False)
         self.btn_run_stop.setEnabled(True)
 
+        # Lưu lại để quy đổi tiến trình tương đối (từ RunPointsThread) về
+        # tiến trình tuyệt đối trên progress bar, và để cộng dồn đúng khi
+        # lần chạy này kết thúc (dù hoàn tất hay bị dừng/lỗi giữa chừng).
+        self._run_start_index = start_index
+        self._run_total_points = len(points_all)
+
+        # Quỹ đạo chuyển động RIÊNG (kinematics/board_points_motion.py) -
+        # tạo ở GUI thread để thanh trượt tốc độ có thể chỉnh trực tiếp lên
+        # đối tượng này ngay cả khi đang chạy.
+        motion = BoardPointsMotionPlanner(self.ctx.planner, self.ctx.robot_uart)
+        motion.set_speed(self.slider_run_speed.value())
+        self._active_motion = motion
+
         self._run_thread = RunPointsThread(
-            self.ctx, points,
+            motion, points_to_run,
             z_travel=self.spin_z_travel.value(),
+            z_down=self.spin_z_down.value(),
             dwell_s=self.spin_dwell.value(),
+            dwell_down_s=self.spin_dwell_down.value(),
         )
         self._run_thread.log_line.connect(self._append_log)
         self._run_thread.progress.connect(self._on_run_progress)
@@ -726,28 +1303,73 @@ class BoardCalibWindow(BaseTabWindow):
         self._run_thread.start()
 
     def _on_run_progress(self, current, total):
-        self.progress_run.setValue(current)
-        self.progress_run.setFormat(f"{current}/{total}")
+        # current/total là tiến trình TƯƠNG ĐỐI trong danh sách điểm được
+        # giao cho lần chạy này (points_to_run) - quy đổi về tuyệt đối
+        # theo toàn bộ CSV để progress bar hiển thị đúng khi đang resume.
+        absolute_current = self._run_start_index + current
+        absolute_total = self._run_total_points
+        self.progress_run.setValue(absolute_current)
+        self.progress_run.setFormat(f"{absolute_current}/{absolute_total}")
+
+    def _mark_run_progress(self, completed_in_this_run):
+        """Cập nhật _points_done_count (tuyệt đối) sau khi 1 lần chạy kết
+        thúc (dù hoàn tất hết, bị dừng, hay bị lỗi giữa chừng). Trả về
+        True nếu đã chạy HẾT toàn bộ CSV (không còn gì để tiếp tục)."""
+        self._points_done_count = self._run_start_index + completed_in_this_run
+        total = self._run_total_points
+        if self._points_done_count >= total:
+            # Đã xong toàn bộ - xoá cache để lần START kế tiếp load lại
+            # từ đầu (một vòng chạy mới hoàn toàn).
+            self._csv_points_cache = None
+            self._csv_points_path = None
+            self._points_done_count = 0
+            return True
+        return False
 
     def _on_run_finished_ok(self, completed):
         self.ctx.busy = False
-        self._append_log(f"=== HOÀN TẤT (Done): đã tới {completed} điểm. ===")
+        finished_all = self._mark_run_progress(completed)
+        if finished_all:
+            self._append_log(f"=== HOÀN TẤT (Done): đã chạy hết toàn bộ {self._run_total_points} điểm. ===")
+        else:
+            done = self._points_done_count
+            total = self._run_total_points
+            self._append_log(
+                f"⏸ Đã dừng - hoàn tất {done}/{total} điểm. Bấm START để chạy tiếp từ điểm {done + 1}."
+            )
         self.btn_run_start.setEnabled(True)
         self.btn_run_stop.setEnabled(False)
 
-    def _on_run_finished_err(self, err):
+    def _on_run_finished_err(self, err, completed):
         self.ctx.busy = False
+        finished_all = self._mark_run_progress(completed)
         self._append_log(f"⚠ LỖI: {err}")
+        if not finished_all:
+            done = self._points_done_count
+            total = self._run_total_points
+            self._append_log(
+                f"⏸ Đã dừng vì lỗi - hoàn tất {done}/{total} điểm. Bấm START để chạy tiếp từ điểm {done + 1}."
+            )
         self.btn_run_start.setEnabled(True)
         self.btn_run_stop.setEnabled(False)
 
     def _on_run_thread_finished(self):
         self._run_thread = None
+        self._active_motion = None
 
     def on_run_stop(self):
-        """STOP: dừng vòng chạy điểm, rồi về HOME VẬT LÝ (chạm công tắc hành
-        trình, chờ READY từ STM32) - giống các cửa sổ BÀI TOÁN BẬC 4 TĨNH /
-        BÀI TOÁN ĐỘNG BẬC 4."""
+        """STOP: dừng vòng chạy điểm NGAY SAU điểm hiện tại (điểm đang
+        chạy dở vẫn hoàn tất bình thường, không bị cắt ngang giữa chừng
+        một cách nguy hiểm), rồi về HẲN HOME VẬT LÝ (chạm công tắc hành
+        trình, chờ READY từ STM32) - bước an toàn cuối cùng khi người
+        dùng chủ động dừng.
+
+        Số điểm ĐÃ hoàn tất trước khi dừng được `_on_run_finished_ok`/
+        `_on_run_finished_err` (phát ra ngay khi RunPointsThread kết
+        thúc, TRƯỚC khi hàm này gọi Home vật lý xong) ghi lại vào
+        `_points_done_count`. Nhờ vậy, khi người dùng bấm lại START, hệ
+        thống biết chính xác cần chạy tiếp từ điểm nào - không chạy lại
+        từ đầu."""
         if self._run_thread is not None:
             self._append_log("[YÊU CẦU DỪNG] Sẽ dừng sau khi tới điểm hiện tại...")
             self._run_thread.request_stop()
@@ -768,6 +1390,16 @@ class BoardCalibWindow(BaseTabWindow):
         self.ctx.busy = False
         if ready:
             self._append_log("✔ Đã về HOME xong (READY).")
+            # Đồng bộ lại vị trí PHẦN MỀM (planner.current_pos) khớp với vị
+            # trí VẬT LÝ thật sau khi Home: robot vừa chạm công tắc hành
+            # trình nên chắc chắn đang ở đúng planner.HOME. Nếu không đồng
+            # bộ lại, lần START tiếp theo sẽ tính quãng đường di chuyển từ
+            # một current_pos SAI (vị trí trước khi Home), gây giật/lệch ở
+            # đoạn di chuyển đầu tiên.
+            try:
+                self.ctx.planner.current_pos = list(self.ctx.planner.HOME)
+            except Exception:
+                pass
         else:
             self._append_log("⚠ Không nhận được READY từ STM32.")
         self.btn_run_start.setEnabled(True)
@@ -777,6 +1409,9 @@ class BoardCalibWindow(BaseTabWindow):
         if self._capture_thread is not None:
             self._capture_thread.request_stop()
             self._capture_thread.wait(2000)
+        if self._ref_capture_thread is not None:
+            self._ref_capture_thread.request_stop()
+            self._ref_capture_thread.wait(2000)
         if self._run_thread is not None:
             self._run_thread.request_stop()
             self._run_thread.wait(2000)

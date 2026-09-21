@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QGroupBox,
     QDoubleSpinBox, QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QSizePolicy,
+    QMessageBox, QSizePolicy, QSlider,
 )
 
 # MỚI
@@ -18,6 +18,20 @@ from vision.Camera_4dof import (
     detect_frame_holes, detect_objects, undistort_image,
     DET_SCALE, _build_red_mask, required_dof4_rotation,
 )
+
+# Các khóa tham số tốc độ (thời gian di chuyển) mà thanh trượt SPEED sẽ
+# scale trên planner_dof4 - giống hệt cơ chế đã dùng ở CsvWindow, cùng
+# thao tác trên DeltaMotionPlanner (move_delta_4dof.py). CONTROL_HZ và
+# MAX_STEP_MM KHÔNG bị scale vì chúng quyết định độ mịn/thẳng quỹ đạo,
+# cần giữ nguyên ở mọi mức tốc độ.
+_SPEED_SLIDER_TIME_KEYS = (
+    "TIME_MOVE_FAST",
+    "TIME_MOVE_DOWN",
+    "TIME_MOVE_ACTION",
+    "TIME_DELAY_GRIPPER",
+    "TIME_DELAY_DOF4",
+)
+
 
 # ==================== LUỒNG CAMERA CHO BÀI TOÁN ĐỘNG (có ROI + vẽ) ====================
 class DynamicCameraThread(QThread):
@@ -71,9 +85,10 @@ class DynamicCameraThread(QThread):
             fx, fy = new_cm[0, 0], new_cm[1, 1]
             cx, cy = new_cm[0, 2], new_cm[1, 2]
 
-            # Tính ROI: ô vuông ở giữa, kích thước = 1/3 chiều nhỏ nhất
+            # Tính ROI: ô vuông ở giữa, kích thước tăng thêm so với 5/9
+            # trước đó - khớp với vision/Camera_4dof.py
             h, w = undistorted.shape[:2]
-            roi_size = min(w, h) // 3
+            roi_size = int(min(w, h) * 2 / 3)
             roi = (w//2 - roi_size//2, h//2 - roi_size//2, roi_size, roi_size)
 
             # Chuẩn bị mask (dùng chung cho cả frame và vật)
@@ -172,8 +187,14 @@ class DynamicCameraThread(QThread):
 # ==================== CỬA SỔ BÀI TOÁN ĐỘNG ====================
 class DynamicWindow(BaseTabWindow):
     def __init__(self, ctx, launcher):
-        super().__init__(ctx, launcher, "🧩 BÀI TOÁN BẬC 4 TĨNH")
+        super().__init__(ctx, launcher, "BÀI TOÁN BẬC 4 TĨNH")
+
+        # Ghi lại tham số tốc độ GỐC (100%) của planner_dof4 ngay khi
+        # window được tạo, để thanh trượt luôn scale từ một mốc cố định.
+        self._base_speed_params = self._capture_base_speed_params()
+
         self._build_ui()
+        self._restore_saved_speed_percent()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -181,6 +202,14 @@ class DynamicWindow(BaseTabWindow):
         self.btn_dyn_stop.setEnabled(self.ctx.dynamic_running)
 
     # ------------------------------------------------------------------
+    def _capture_base_speed_params(self):
+        planner = self.ctx.planner_dof4
+        return {
+            key: getattr(planner, key)
+            for key in _SPEED_SLIDER_TIME_KEYS
+            if hasattr(planner, key)
+        }
+
     def _build_ui(self):
         root = QHBoxLayout(self.content_widget)
 
@@ -206,15 +235,40 @@ class DynamicWindow(BaseTabWindow):
 
         ctrl_col = QVBoxLayout()
 
+        # ---- THANH TRƯỢT TỐC ĐỘ (mới) ----
+        speed_box = QGroupBox("TỐC ĐỘ DI CHUYỂN")
+        speed_box.setMaximumHeight(76)
+        speed_box.setStyleSheet(
+            "QGroupBox { margin-top:8px; padding-top:6px; }"
+        )
+        speed_layout = QHBoxLayout()
+        speed_layout.setContentsMargins(10, 4, 10, 6)
+        speed_layout.setSpacing(8)
+
+        speed_layout.addWidget(QLabel("Chậm"))
+        self.slider_speed_dyn = QSlider(Qt.Horizontal)
+        self.slider_speed_dyn.setRange(25, 200)   # 25% (chậm) -> 200% (nhanh gấp đôi)
+        self.slider_speed_dyn.setSingleStep(5)
+        self.slider_speed_dyn.setPageStep(25)
+        self.slider_speed_dyn.setValue(100)
+        self.slider_speed_dyn.valueChanged.connect(self._on_speed_slider_changed)
+        speed_layout.addWidget(self.slider_speed_dyn, 1)
+        speed_layout.addWidget(QLabel("Nhanh"))
+
+        self.lbl_speed_value_dyn = QLabel("100%")
+        self.lbl_speed_value_dyn.setMinimumWidth(48)
+        self.lbl_speed_value_dyn.setStyleSheet("font-weight:700;")
+        speed_layout.addWidget(self.lbl_speed_value_dyn)
+
+        speed_box.setLayout(speed_layout)
+        ctrl_col.addWidget(speed_box)
+
         info_box = QGroupBox("LOGIC TỰ ĐỘNG")
         info_box.setObjectName("compactBox")
         info_layout = QVBoxLayout()
         info_lbl = QLabel(
             "Camera nhận diện đồng thời: vật rời (khối đặc đỏ 10x20mm) và khuôn "
-            "8 lỗ (viền đỏ, rỗng) - cả hai đều được nhận diện lại mỗi khung hình. "
-            "Robot tự động gắp từng vật rồi thả đúng vào lỗ trống kế tiếp của "
-            "khuôn, xoay bậc tự do 4 theo ĐÚNG góc của lỗ đó (không dùng góc cố "
-            "định). Không cần CSV - máy tự chạy liên tục khi còn vật và còn lỗ trống."
+            "8 lỗ (viền đỏ, rỗng)"
         )
         info_lbl.setWordWrap(True)
         info_lbl.setStyleSheet("color:#333333; font-size:9pt;")
@@ -252,10 +306,10 @@ class DynamicWindow(BaseTabWindow):
         ctrl_col.addWidget(info_box)
 
         start_stop_row = QHBoxLayout()
-        self.btn_dyn_start = QPushButton("▶ START")
+        self.btn_dyn_start = QPushButton("▶ BẮT ĐẦU")
         self.btn_dyn_start.setObjectName("dynStartBtn")
         self.btn_dyn_start.clicked.connect(self.on_dynamic_start)
-        self.btn_dyn_stop = QPushButton("■ STOP")
+        self.btn_dyn_stop = QPushButton("■ DỪNG")
         self.btn_dyn_stop.setObjectName("dynStopBtn")
         self.btn_dyn_stop.clicked.connect(self.on_dynamic_stop)
         self.btn_dyn_stop.setEnabled(False)
@@ -270,6 +324,35 @@ class DynamicWindow(BaseTabWindow):
         root.addLayout(video_col, 3)
         root.addLayout(ctrl_col, 2)
 
+    # ------------------------------------------------------------------
+    # SPEED SLIDER
+    # ------------------------------------------------------------------
+    def _restore_saved_speed_percent(self):
+        """Khôi phục % tốc độ đã lưu lần trước (nếu có) khi mở lại app."""
+        saved_percent = int(self.ctx.cfg.get("dyn_speed_percent", 100))
+        saved_percent = max(self.slider_speed_dyn.minimum(), min(self.slider_speed_dyn.maximum(), saved_percent))
+        if saved_percent != 100:
+            self.slider_speed_dyn.setValue(saved_percent)  # sẽ tự trigger _on_speed_slider_changed
+        else:
+            self.lbl_speed_value_dyn.setText("100%")
+
+    def _on_speed_slider_changed(self, value):
+        self.lbl_speed_value_dyn.setText(f"{value}%")
+        scale = value / 100.0
+
+        scaled_params = {}
+        for key, base_time in self._base_speed_params.items():
+            # % càng cao -> di chuyển càng NHANH -> thời gian càng NHỎ.
+            scaled_params[key] = base_time / scale if scale > 0 else base_time
+
+        # KHÔNG scale CONTROL_HZ / MAX_STEP_MM: hai tham số này quyết định
+        # độ mịn và độ thẳng của quỹ đạo, cần giữ nguyên ở mọi tốc độ.
+        self.ctx.planner_dof4.update_speed_params(scaled_params)
+
+        self.ctx.cfg["dyn_speed_percent"] = value
+        save_config(self.ctx.cfg)
+
+    # ------------------------------------------------------------------
     def _on_dyn_zpick_changed(self, val):
         self.ctx.cfg["dyn_z_pick"] = val
         save_config(self.ctx.cfg)
