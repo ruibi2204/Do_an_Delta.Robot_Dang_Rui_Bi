@@ -20,8 +20,7 @@ from vision.Camera_4dof import (
 )
 
 # Các khóa tham số tốc độ (thời gian di chuyển) mà thanh trượt SPEED sẽ
-# scale trên planner_dof4 - giống hệt cơ chế đã dùng ở CsvWindow, cùng
-# thao tác trên DeltaMotionPlanner (move_delta_4dof.py). CONTROL_HZ và
+# scale trên planner_dof4 - giống hệt cơ chế ở CsvWindow. CONTROL_HZ và
 # MAX_STEP_MM KHÔNG bị scale vì chúng quyết định độ mịn/thẳng quỹ đạo,
 # cần giữ nguyên ở mọi mức tốc độ.
 _SPEED_SLIDER_TIME_KEYS = (
@@ -85,8 +84,7 @@ class DynamicCameraThread(QThread):
             fx, fy = new_cm[0, 0], new_cm[1, 1]
             cx, cy = new_cm[0, 2], new_cm[1, 2]
 
-            # Tính ROI: ô vuông ở giữa, kích thước tăng thêm so với 5/9
-            # trước đó - khớp với vision/Camera_4dof.py
+            # Tính ROI: ô vuông ở giữa - khớp với vision/Camera_4dof.py
             h, w = undistorted.shape[:2]
             roi_size = int(min(w, h) * 2 / 3)
             roi = (w//2 - roi_size//2, h//2 - roi_size//2, roi_size, roi_size)
@@ -151,11 +149,8 @@ class DynamicCameraThread(QThread):
                     (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2,
                 )
 
-            # Thêm FPS và độ sáng (tuỳ chọn, để giống hệt Camera_4dof)
             cv2.putText(display, f"FPS: {fps:.1f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            # Không có điều chỉnh độ sáng ở đây, nhưng vẫn có thể thêm
-            # cv2.putText(display, f"Do sang: ...", ...)
 
             # Tạo danh sách items (kết hợp khung + vật) để hiển thị trên bảng
             items = []
@@ -186,6 +181,10 @@ class DynamicCameraThread(QThread):
 
 # ==================== CỬA SỔ BÀI TOÁN ĐỘNG ====================
 class DynamicWindow(BaseTabWindow):
+    # Log phát từ luồng nền PHẢI đi qua Signal (QTimer.singleShot trong
+    # QThread không có event loop nên không bao giờ chạy).
+    log_signal = Signal(str)
+
     def __init__(self, ctx, launcher):
         super().__init__(ctx, launcher, "BÀI TOÁN BẬC 4 TĨNH")
 
@@ -194,6 +193,7 @@ class DynamicWindow(BaseTabWindow):
         self._base_speed_params = self._capture_base_speed_params()
 
         self._build_ui()
+        self.log_signal.connect(self.log_box_dyn.append)
         self._restore_saved_speed_percent()
 
     def showEvent(self, event):
@@ -218,7 +218,7 @@ class DynamicWindow(BaseTabWindow):
         self.video_label_dyn.setAlignment(Qt.AlignCenter)
         self.video_label_dyn.setMinimumSize(720, 480)
         self.video_label_dyn.setStyleSheet(
-            "background-color:#ffffff; border:2px solid #c0c0c0; border-radius:10px; color:#888888;"
+            "background-color:#0f2540; border:2px solid #2a4a75; border-radius:10px; color:#9fb6d6;"
         )
         self.video_label_dyn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         video_col.addWidget(self.video_label_dyn, 5)
@@ -235,7 +235,7 @@ class DynamicWindow(BaseTabWindow):
 
         ctrl_col = QVBoxLayout()
 
-        # ---- THANH TRƯỢT TỐC ĐỘ (mới) ----
+        # ---- THANH TRƯỢT TỐC ĐỘ ----
         speed_box = QGroupBox("TỐC ĐỘ DI CHUYỂN")
         speed_box.setMaximumHeight(76)
         speed_box.setStyleSheet(
@@ -275,12 +275,21 @@ class DynamicWindow(BaseTabWindow):
         info_layout.addWidget(info_lbl)
 
         zrow = QHBoxLayout()
-        zrow.addWidget(QLabel("Z pick:"))
+        zrow.addWidget(QLabel("Z gắp:"))
         self.spin_dyn_z_pick = QDoubleSpinBox()
         self.spin_dyn_z_pick.setRange(0, 500)
         self.spin_dyn_z_pick.setValue(self.ctx.cfg.get("dyn_z_pick", 340.0))
         self.spin_dyn_z_pick.valueChanged.connect(self._on_dyn_zpick_changed)
         zrow.addWidget(self.spin_dyn_z_pick)
+
+        zrow.addWidget(QLabel("Z thả:"))
+        self.spin_dyn_z_place = QDoubleSpinBox()
+        self.spin_dyn_z_place.setRange(0, 500)
+        self.spin_dyn_z_place.setValue(
+            self.ctx.cfg.get("dyn_z_place", self.ctx.cfg.get("dyn_z_pick", 340.0))
+        )
+        self.spin_dyn_z_place.valueChanged.connect(self._on_dyn_zplace_changed)
+        zrow.addWidget(self.spin_dyn_z_place)
         info_layout.addLayout(zrow)
 
         offset_layout = QHBoxLayout()
@@ -332,7 +341,7 @@ class DynamicWindow(BaseTabWindow):
         saved_percent = int(self.ctx.cfg.get("dyn_speed_percent", 100))
         saved_percent = max(self.slider_speed_dyn.minimum(), min(self.slider_speed_dyn.maximum(), saved_percent))
         if saved_percent != 100:
-            self.slider_speed_dyn.setValue(saved_percent)  # sẽ tự trigger _on_speed_slider_changed
+            self.slider_speed_dyn.setValue(saved_percent)  # tự trigger _on_speed_slider_changed
         else:
             self.lbl_speed_value_dyn.setText("100%")
 
@@ -357,6 +366,10 @@ class DynamicWindow(BaseTabWindow):
         self.ctx.cfg["dyn_z_pick"] = val
         save_config(self.ctx.cfg)
 
+    def _on_dyn_zplace_changed(self, val):
+        self.ctx.cfg["dyn_z_place"] = val
+        save_config(self.ctx.cfg)
+
     def _on_dyn_offset_x_changed(self, val):
         self.ctx.dyn_offset_x = val
         self.ctx.cfg["dyn_offset_x"] = val
@@ -368,8 +381,11 @@ class DynamicWindow(BaseTabWindow):
         save_config(self.ctx.cfg)
 
     def _append_log_threadsafe_dyn(self, text):
-        QTimer.singleShot(0, lambda: self.log_box_dyn.append(text))
+        self.log_signal.emit(str(text))
 
+    # ------------------------------------------------------------------
+    # START / STOP
+    # ------------------------------------------------------------------
     def on_dynamic_start(self):
         if self.ctx.dynamic_running:
             return
@@ -387,8 +403,25 @@ class DynamicWindow(BaseTabWindow):
         self.btn_dyn_start.setEnabled(False)
         self.ctx.busy = True
 
-        hx, hy, hz = self.ctx.home_pos
-        worker = FnWorker(self.ctx.planner_dof4.send_position, hx, hy, hz)
+        def home_first_task():
+            planner = self.ctx.planner_dof4
+            planner.clear_abort()
+            # Đồng bộ HOME với vị trí đã lưu ở tab MANUAL.
+            with contextlib.suppress(Exception):
+                planner.set_home(*self.ctx.home_pos)
+            # Dùng vị trí thực tế mà GUI đang theo dõi làm điểm xuất phát.
+            # Nếu planner đang "không rõ vị trí" (vừa homing công tắc hành
+            # trình) thì GIỮ nguyên trạng thái đó.
+            cur = getattr(self.ctx, "current_pos", None)
+            if planner.current_pos is not None:
+                if cur is not None and len(cur) == 3:
+                    planner.current_pos = tuple(float(v) for v in cur)
+                else:
+                    planner.invalidate_position()
+            with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log_threadsafe_dyn(s))):
+                return planner.move_home()
+
+        worker = FnWorker(home_first_task)
         worker.done_ok.connect(self._on_dynamic_home_done)
         worker.done_err.connect(self._on_dynamic_start_error)
         self._track_worker(worker)
@@ -399,7 +432,7 @@ class DynamicWindow(BaseTabWindow):
             self._append_log_threadsafe_dyn("⚠ Về Home thất bại - không thể bắt đầu.")
             self.btn_dyn_start.setEnabled(True)
             return
-        self.ctx.current_pos = list(self.ctx.home_pos)
+        self.ctx.current_pos = list(self.ctx.planner_dof4.HOME)
         self._append_log_threadsafe_dyn("✔ Đã về Home. Bắt đầu camera + vòng lặp tự động...")
         self.ctx.dynamic_running = True
         self.btn_dyn_stop.setEnabled(True)
@@ -410,6 +443,9 @@ class DynamicWindow(BaseTabWindow):
         self._append_log_threadsafe_dyn(f"⚠ LỖI: {err}")
         self.btn_dyn_start.setEnabled(True)
 
+    # ------------------------------------------------------------------
+    # CAMERA
+    # ------------------------------------------------------------------
     def _start_dynamic_camera(self):
         if self.ctx.dynamic_camera_thread is not None:
             return
@@ -463,6 +499,9 @@ class DynamicWindow(BaseTabWindow):
 
         self._dynamic_maybe_start_cycle()
 
+    # ------------------------------------------------------------------
+    # CHU TRÌNH GẮP - THẢ
+    # ------------------------------------------------------------------
     def _dynamic_maybe_start_cycle(self):
         if not self.ctx.dynamic_running or self.ctx.dynamic_busy or self.ctx.busy:
             return
@@ -486,19 +525,20 @@ class DynamicWindow(BaseTabWindow):
         obj_angle = obj.get("angle_deg")
         hole_angle = hole.get("angle_deg", 90.0)
         z_pick = self.spin_dyn_z_pick.value()
+        z_place = self.spin_dyn_z_place.value()
 
         def task():
             with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log_threadsafe_dyn(s))):
-                self.ctx.planner_dof4.pick_and_place_dof4(
+                return self.ctx.planner_dof4.pick_and_place_dof4(
                     point_a,
                     z_pick=z_pick,
+                    z_place=z_place,
                     gripper_callback=self.ctx.gripper_callback,
                     rotate_callback=self.ctx.pneu_uart.step_rotate,
                     object_angle_deg=obj_angle,
                     place_point=place_point,
                     target_angle_deg=hole_angle,
                 )
-            return True
 
         worker = FnWorker(task)
         worker.done_ok.connect(self._on_dynamic_cycle_done)
@@ -516,13 +556,20 @@ class DynamicWindow(BaseTabWindow):
         self.ctx.busy = False
         self._append_log_threadsafe_dyn(f"⚠ LỖI chu trình: {err}")
 
+    # ------------------------------------------------------------------
+    # STOP
+    # ------------------------------------------------------------------
     def on_dynamic_stop(self):
         if not self.ctx.dynamic_running and self.ctx.dynamic_camera_thread is None:
             return
         self.ctx.dynamic_running = False
         self.btn_dyn_stop.setEnabled(False)
+        # NGẮT NGAY chu trình gắp-thả đang chạy (nếu có): robot nhấc lên,
+        # về HOME, tắt bơm và xoay bàn xoay về vị trí cũ.
+        if self.ctx.dynamic_busy:
+            self.ctx.planner_dof4.request_abort()
         self._append_log_threadsafe_dyn(
-            "=== STOP: dừng vòng lặp, chờ chu trình hiện tại (nếu có) hoàn tất rồi về HOME vật lý... ==="
+            "=== STOP: ngắt chu trình hiện tại (nếu có), về HOME vật lý... ==="
         )
         self._stop_dynamic_camera()
         self._dynamic_wait_then_home()
@@ -532,7 +579,15 @@ class DynamicWindow(BaseTabWindow):
             QTimer.singleShot(300, self._dynamic_wait_then_home)
             return
         self._append_log_threadsafe_dyn("↻ Đang về HOME vật lý (chạm công tắc hành trình) và chờ READY...")
-        worker = FnWorker(home_and_wait, self.ctx.robot_uart, timeout=20.0)
+
+        def home_task():
+            planner = self.ctx.planner_dof4
+            planner.clear_abort()  # xóa cờ ngắt còn sót
+            ready = home_and_wait(self.ctx.robot_uart, timeout=20.0)
+            planner.invalidate_position()  # firmware đã tự đưa robot đi chỗ khác
+            return ready
+
+        worker = FnWorker(home_task)
         worker.done_ok.connect(self._on_dynamic_stop_home_done)
         worker.done_err.connect(self._on_dynamic_start_error)
         self._track_worker(worker)
@@ -542,4 +597,5 @@ class DynamicWindow(BaseTabWindow):
             self._append_log_threadsafe_dyn("✔ Đã về HOME xong (READY).")
         else:
             self._append_log_threadsafe_dyn("⚠ Không nhận được READY từ STM32.")
+        self.ctx.current_pos = list(self.ctx.planner_dof4.HOME)
         self.btn_dyn_start.setEnabled(True)

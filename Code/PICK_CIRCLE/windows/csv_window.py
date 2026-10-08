@@ -2,7 +2,7 @@ import os
 import time
 import contextlib
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton, QLabel,
     QGroupBox, QDoubleSpinBox, QTextEdit, QMessageBox, QCheckBox,
@@ -28,39 +28,50 @@ _SPEED_SLIDER_TIME_KEYS = (
 )
 
 
+# True: khi DỪNG, robot về HOME đã lưu (an toàn) rồi chạy homing của firmware
+# (về công tắc hành trình) và CHỜ tín hiệu READY trước khi cho Bắt đầu lại.
+# False: chỉ về HOME đã lưu bằng planner, không homing công tắc hành trình.
+USE_FIRMWARE_HOME = True
+
+
 class CsvWindow(BaseTabWindow):
+    # Log/tiến trình phát từ luồng nền PHẢI đi qua Signal (QTimer.singleShot
+    # trong QThread không có event loop nên không bao giờ chạy).
+    log_signal = Signal(str)
+    progress_signal = Signal(str)
+
     """
     STATIC TASK — LIVE CAMERA AUTO PICK & PLACE.
 
-    Same control mechanism as the "static DOF4" style workflow: the camera
-    stays on and keeps detecting objects continuously (using the exact same
-    detection/drawing pipeline as Cameracircle.py, via CameraThread in
-    "circle" mode). There is no CSV list to load anymore — whenever a
-    WHITE object and a matching BLACK hole are seen, the robot immediately
-    picks the object and places it into the hole. This repeats in a loop
-    until STOP is pressed.
+    Camera luôn bật và nhận diện liên tục (CameraThread ở chế độ "circle").
+    Khi thấy vật TRẮNG và lỗ ĐEN tương ứng, robot gắp vật và thả vào lỗ,
+    lặp lại cho đến khi nhấn DỪNG.
 
-    On STOP: the automation loop finishes its current cycle, the camera is
-    turned off, the robot is sent HOME, and the app waits for the
-    controller to report READY before re-enabling START.
+    Trình tự: Z safe cố định -> hạ Z gắp -> nhấc Z safe -> sang B -> hạ Z thả
+    -> nhấc Z safe -> HOME.
 
-    A SPEED slider lets the user scale the robot's overall movement speed
-    up/down live (even while the automation loop is running), without
-    affecting trajectory straightness/smoothness.
+    Khi DỪNG: camera tắt NGAY, chu trình gắp-thả đang chạy (nếu có) bị ngắt
+    ngay (nhấc lên, về HOME đã lưu, tắt bơm), sau đó robot homing về công
+    tắc hành trình và chờ READY rồi mới cho phép BẮT ĐẦU lại.
+
+    Thanh trượt TỐC ĐỘ scale tốc độ di chuyển live mà không ảnh hưởng độ
+    thẳng/mịn của quỹ đạo.
     """
 
     def __init__(self, ctx, launcher):
         super().__init__(ctx, launcher, "🗂️ BÀI TOÁN TĨNH — CAMERA TRỰC TIẾP")
         self._running = False
         self._stop_flag = False
+        self._loop_active = False   # True khi vòng gắp-thả tự động đang chạy
         self.camera_thread = None
 
         # Ghi lại tham số tốc độ GỐC (100%) của planner ngay khi window
-        # được tạo, để thanh trượt luôn scale từ một mốc cố định chứ
-        # không bị trôi dần qua nhiều lần kéo.
+        # được tạo, để thanh trượt luôn scale từ một mốc cố định.
         self._base_speed_params = self._capture_base_speed_params()
 
         self._build_ui()
+        self.log_signal.connect(self.log_box_csv.append)
+        self.progress_signal.connect(self.lbl_csv_progress.setText)
         self._restore_saved_speed_percent()
 
     def showEvent(self, event):
@@ -69,7 +80,7 @@ class CsvWindow(BaseTabWindow):
 
     # ------------------------------------------------------------------
     def _capture_base_speed_params(self):
-        planner = self.ctx.planner
+        planner = self.ctx.planner_3dof
         return {
             key: getattr(planner, key)
             for key in _SPEED_SLIDER_TIME_KEYS
@@ -103,7 +114,7 @@ class CsvWindow(BaseTabWindow):
         # ---------------- RIGHT: controls + log ----------------
         right_col = QVBoxLayout()
 
-        # ---- THANH TRƯỢT TỐC ĐỘ (mới) ----
+        # ---- THANH TRƯỢT TỐC ĐỘ ----
         speed_box = QGroupBox("TỐC ĐỘ DI CHUYỂN")
         speed_box.setMaximumHeight(76)
         speed_box.setStyleSheet(
@@ -175,6 +186,14 @@ class CsvWindow(BaseTabWindow):
         self.spin_csv_z_pick.setRange(0, 500)
         self.spin_csv_z_pick.setValue(self.ctx.cfg.get("csv_z_pick", 300.0))
         place_layout.addWidget(self.spin_csv_z_pick, 2, 1)
+
+        place_layout.addWidget(QLabel("Z THẢ:"), 3, 0)
+        self.spin_csv_z_place = QDoubleSpinBox()
+        self.spin_csv_z_place.setRange(0, 500)
+        self.spin_csv_z_place.setValue(
+            self.ctx.cfg.get("csv_z_place", self.ctx.cfg.get("csv_z_pick", 300.0))
+        )
+        place_layout.addWidget(self.spin_csv_z_place, 3, 1)
         self.place_box_circle.setLayout(place_layout)
         right_col.addWidget(self.place_box_circle)
 
@@ -215,7 +234,7 @@ class CsvWindow(BaseTabWindow):
         saved_percent = int(self.ctx.cfg.get("csv_speed_percent", 100))
         saved_percent = max(self.slider_speed.minimum(), min(self.slider_speed.maximum(), saved_percent))
         if saved_percent != 100:
-            self.slider_speed.setValue(saved_percent)  # sẽ tự trigger _on_speed_slider_changed
+            self.slider_speed.setValue(saved_percent)  # tự trigger _on_speed_slider_changed
         else:
             self.lbl_speed_value.setText("100%")
 
@@ -230,7 +249,7 @@ class CsvWindow(BaseTabWindow):
 
         # KHÔNG scale CONTROL_HZ / MAX_STEP_MM: hai tham số này quyết định
         # độ mịn và độ thẳng của quỹ đạo, cần giữ nguyên ở mọi tốc độ.
-        self.ctx.planner.update_speed_params(scaled_params)
+        self.ctx.planner_3dof.update_speed_params(scaled_params)
 
         self.ctx.cfg["csv_speed_percent"] = value
         save_config(self.ctx.cfg)
@@ -286,6 +305,10 @@ class CsvWindow(BaseTabWindow):
     # CAMERA
     # ------------------------------------------------------------------
     def _start_camera(self):
+        # Xóa dữ liệu cũ của lần chạy trước để vòng lặp không gắp theo
+        # vị trí đã lỗi thời.
+        self.ctx.latest_circles = []
+
         calib_file = self.ctx.cfg.get("calib_file")
         calib_path = os.path.join(BASE_DIR, calib_file) if calib_file else None
 
@@ -300,12 +323,24 @@ class CsvWindow(BaseTabWindow):
         self.camera_thread.start()
 
     def _stop_camera(self):
-        if self.camera_thread:
-            self.camera_thread.stop()
-            self.camera_thread.wait(2000)
-            self.camera_thread = None
-        self.video_label.setPixmap(self.video_label.pixmap().__class__())
+        """Tắt camera ngay lập tức. An toàn khi gọi nhiều lần."""
+        cam = self.camera_thread
+        self.camera_thread = None
+        if cam:
+            # Ngắt signal trước để frame cũ còn tồn đọng không vẽ đè lên label.
+            for sig, slot in ((cam.frame_ready, self._on_camera_frame),
+                              (cam.error, self._on_camera_error)):
+                with contextlib.suppress(Exception):
+                    sig.disconnect(slot)
+            cam.stop()
+            # KHÔNG dùng terminate(): kill thread đang giữ VideoCapture sẽ
+            # làm cap.release() không chạy, camera bị kẹt sáng đèn.
+            if not cam.wait(5000):
+                self._append_log_threadsafe("⚠ Camera chưa dừng kịp sau 5s")
+        self.ctx.latest_circles = []
+        self.video_label.clear()
         self.video_label.setText("CAMERA ĐANG TẮT.\nNHẤN BẮT ĐẦU ĐỂ KHỞI ĐỘNG.")
+        self.lbl_cam_status.setText("FPS: -- | ĐÃ PHÁT HIỆN: --")
 
     def _on_camera_frame(self, frame, items, fps):
         self.ctx.latest_circles = items
@@ -333,11 +368,13 @@ class CsvWindow(BaseTabWindow):
         same_color_only = self.chk_csv_same_color.isChecked()
         tolerance = self.spin_csv_tolerance.value()
         z_pick = self.spin_csv_z_pick.value()
+        z_place = self.spin_csv_z_place.value()
         offset_x, offset_y = self.ctx.csv_offset_x, self.ctx.csv_offset_y
 
         self.ctx.cfg["csv_match_tolerance"] = tolerance
         self.ctx.cfg["csv_match_same_color"] = same_color_only
         self.ctx.cfg["csv_z_pick"] = z_pick
+        self.ctx.cfg["csv_z_place"] = z_place
         save_config(self.ctx.cfg)
 
         self._running = True
@@ -351,17 +388,34 @@ class CsvWindow(BaseTabWindow):
         self.lbl_csv_progress.setText("Đang di chuyển về vị trí HOME đã lưu...")
 
         def home_first_task():
-            return self.ctx.planner.move_home()
+            planner = self.ctx.planner_3dof
+            planner.clear_abort()
+            # Đồng bộ HOME với vị trí đã lưu ở tab MANUAL.
+            with contextlib.suppress(Exception):
+                planner.set_home(*self.ctx.home_pos)
+            # Dùng vị trí thực tế mà GUI đang theo dõi (jog tay...) làm điểm
+            # xuất phát để nội suy mượt tới HOME đã lưu.
+            # Nếu planner đang "không rõ vị trí" (vừa homing công tắc hành
+            # trình) thì GIỮ nguyên trạng thái đó, không ghi đè bằng ctx.
+            cur = getattr(self.ctx, "current_pos", None)
+            if planner.current_pos is not None:
+                if cur is not None and len(cur) == 3:
+                    planner.current_pos = tuple(float(v) for v in cur)
+                else:
+                    planner.invalidate_position()
+            with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log_threadsafe(s))):
+                return planner.move_home()
 
         worker = FnWorker(home_first_task)
         worker.done_ok.connect(
-            lambda ok: self._on_start_home_done(ok, same_color_only, tolerance, z_pick, offset_x, offset_y)
+            lambda ok: self._on_start_home_done(
+                ok, same_color_only, tolerance, z_pick, z_place, offset_x, offset_y)
         )
         worker.done_err.connect(self._on_start_home_error)
         self._track_worker(worker)
 
-    def _on_start_home_done(self, ok, same_color_only, tolerance, z_pick, offset_x, offset_y):
-        self.ctx.current_pos = list(self.ctx.planner.HOME)
+    def _on_start_home_done(self, ok, same_color_only, tolerance, z_pick, z_place, offset_x, offset_y):
+        self.ctx.current_pos = list(self.ctx.planner_3dof.HOME)
 
         if not ok:
             self.log_box_csv.append("⚠ Không thể về vị trí HOME đã lưu. Hủy khởi động.")
@@ -373,8 +427,7 @@ class CsvWindow(BaseTabWindow):
             return
 
         if self._stop_flag:
-            # STOP was pressed while still moving to HOME — go straight to
-            # the normal stop sequence (already effectively home).
+            # STOP được nhấn khi đang về HOME -> đi thẳng quy trình dừng.
             self._finish_stop()
             return
 
@@ -383,7 +436,9 @@ class CsvWindow(BaseTabWindow):
 
         self._start_camera()
 
-        worker = FnWorker(self._auto_loop, same_color_only, tolerance, z_pick, offset_x, offset_y)
+        self._loop_active = True
+        worker = FnWorker(self._auto_loop, same_color_only, tolerance,
+                          z_pick, z_place, offset_x, offset_y)
         worker.done_ok.connect(self._on_auto_loop_done)
         worker.done_err.connect(self._on_auto_loop_error)
         self._track_worker(worker)
@@ -401,10 +456,20 @@ class CsvWindow(BaseTabWindow):
             return
         self._stop_flag = True
         self.btn_stop.setEnabled(False)
-        self.lbl_csv_progress.setText("⏹ Đang dừng sau khi hoàn tất chu trình hiện tại...")
+        # NGẮT NGAY chu trình gắp-thả đang chạy (nếu có): robot nhấc lên,
+        # về HOME và tắt bơm, không chờ chạy hết chu trình.
+        if self._loop_active:
+            self.ctx.planner_3dof.request_abort()
+        # Tắt camera NGAY. Chu trình gắp-thả đang chạy không cần camera nữa,
+        # và _auto_loop sẽ thoát vì cờ dừng đã bật.
+        try:
+            self._stop_camera()
+        except Exception as e:
+            self.log_box_csv.append(f"⚠ Lỗi khi tắt camera: {e}")
+        self.lbl_csv_progress.setText("⏹ Đã tắt camera. Đang dừng và về HOME...")
 
-    def _auto_loop(self, same_color_only, tolerance, z_pick, offset_x, offset_y):
-        # Let the camera warm up before the first detection is trusted.
+    def _auto_loop(self, same_color_only, tolerance, z_pick, z_place, offset_x, offset_y):
+        # Cho camera khởi động trước khi tin dữ liệu nhận diện đầu tiên.
         time.sleep(1.0)
 
         while not self._stop_flag:
@@ -425,39 +490,62 @@ class CsvWindow(BaseTabWindow):
             point_b = (b["x_mm"] + offset_x, b["y_mm"] + offset_y)
             self._log_pick(w, b, point_a, point_b)
 
-            QTimer.singleShot(
-                0,
-                lambda pa=point_a, pb=point_b: self.lbl_csv_progress.setText(
-                    f"Đang gắp ({pa[0]:.1f},{pa[1]:.1f}) → Đang đặt ({pb[0]:.1f},{pb[1]:.1f})"
-                ),
+            self.progress_signal.emit(
+                f"Đang gắp ({point_a[0]:.1f},{point_a[1]:.1f}) → "
+                f"Đang đặt ({point_b[0]:.1f},{point_b[1]:.1f})"
             )
 
             with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log_threadsafe(s))):
-                self.ctx.planner.pick_and_place(
-                    point_a, point_b, z_pick=z_pick, gripper_callback=self.ctx.gripper_callback
+                self.ctx.planner_3dof.pick_and_place(
+                    point_a, point_b, z_pick=z_pick, z_place=z_place,
+                    gripper_callback=self.ctx.gripper_callback
                 )
 
         return True
 
     def _append_log_threadsafe(self, text):
-        QTimer.singleShot(0, lambda: self.log_box_csv.append(text))
+        self.log_signal.emit(str(text))
 
     def _on_auto_loop_done(self, ok):
+        self._loop_active = False
         self.log_box_csv.append("=== VÒNG LẶP TỰ ĐỘNG ĐÃ DỪNG ===")
         self._finish_stop()
 
     def _on_auto_loop_error(self, err):
+        self._loop_active = False
         self.log_box_csv.append(f"⚠ LỖI: {err}")
         self._finish_stop()
 
     def _finish_stop(self):
-        self._stop_camera()
-        self.lbl_csv_progress.setText("Đang về HOME và chờ READY...")
-        self.log_box_csv.append("=== ĐANG VỀ HOME — ĐANG CHỜ READY ===")
+        # Bọc try/except: nếu tắt camera lỗi thì vẫn phải chạy tiếp bước về
+        # HOME, tránh kẹt ctx.busy / _running = True.
+        try:
+            self._stop_camera()
+        except Exception as e:
+            self.log_box_csv.append(f"⚠ Lỗi khi tắt camera: {e}")
+
+        if USE_FIRMWARE_HOME:
+            self.lbl_csv_progress.setText("Đang về HOME (công tắc hành trình) và chờ READY...")
+            self.log_box_csv.append("=== ĐANG VỀ HOME — ĐANG CHỜ READY ===")
+        else:
+            self.lbl_csv_progress.setText("Đang về HOME...")
+            self.log_box_csv.append("=== ĐANG VỀ HOME ===")
 
         def home_task():
-            self.ctx.planner.move_home()
-            return home_and_wait(self.ctx.robot_uart)
+            planner = self.ctx.planner_3dof
+            planner.clear_abort()  # xóa cờ ngắt còn sót để lệnh về HOME chạy được
+            with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log_threadsafe(s))):
+                ok = planner.move_home()
+            if not USE_FIRMWARE_HOME:
+                time.sleep(0.3)  # chờ robot ổn định tại HOME đã lưu
+                return ok
+            self._append_log_threadsafe("→ Gửi lệnh HOME (công tắc hành trình), đang chờ READY...")
+            ready = home_and_wait(self.ctx.robot_uart)
+            planner.invalidate_position()  # firmware đã tự đưa robot đi chỗ khác
+            self._append_log_threadsafe(
+                "→ Đã nhận READY." if ready else "→ KHÔNG nhận được READY (hết thời gian chờ)."
+            )
+            return ready
 
         worker = FnWorker(home_task)
         worker.done_ok.connect(self._on_home_done)
@@ -469,18 +557,29 @@ class CsvWindow(BaseTabWindow):
         self._set_busy_ui(False)
         self._running = False
         self.btn_stop.setEnabled(False)
-        self.ctx.current_pos = list(self.ctx.planner.HOME)
+        self.ctx.current_pos = list(self.ctx.planner_3dof.HOME)
         if ready_ok:
-            self.lbl_csv_progress.setText("✔ Đã dừng. Robot đang ở HOME và READY.")
-            self.log_box_csv.append("=== HOME + READY ===")
+            if USE_FIRMWARE_HOME:
+                self.lbl_csv_progress.setText("✔ Đã dừng. Camera đã tắt, robot đã HOME và READY.")
+                self.log_box_csv.append("=== HOME + READY ===")
+            else:
+                self.lbl_csv_progress.setText("✔ Đã dừng. Camera đã tắt, robot đang ở HOME.")
+                self.log_box_csv.append("=== ĐÃ VỀ HOME ===")
         else:
-            self.lbl_csv_progress.setText("⚠ Đã dừng, nhưng xác nhận READY hết thời gian chờ.")
-            self.log_box_csv.append("⚠ Xác nhận READY hết thời gian chờ.")
+            if USE_FIRMWARE_HOME:
+                self.lbl_csv_progress.setText("⚠ Đã dừng, nhưng chưa nhận được READY từ robot.")
+                self.log_box_csv.append("⚠ Chưa nhận được READY (xem log phía trên).")
+            else:
+                self.lbl_csv_progress.setText("⚠ Đã dừng, nhưng về HOME không thành công.")
+                self.log_box_csv.append("⚠ Về HOME không thành công (xem log phía trên).")
 
     def _on_home_error(self, err):
         self.ctx.busy = False
         self._set_busy_ui(False)
         self._running = False
         self.btn_stop.setEnabled(False)
+        # Lỗi giữa chừng -> không biết robot đang ở đâu.
+        with contextlib.suppress(Exception):
+            self.ctx.planner_3dof.invalidate_position()
         self.log_box_csv.append(f"⚠ LỖI khi về HOME: {err}")
         self.lbl_csv_progress.setText("⚠ Lỗi khi về HOME.")

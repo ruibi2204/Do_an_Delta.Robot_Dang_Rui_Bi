@@ -188,3 +188,46 @@ class LinearMotionWorker(QThread):
                 time.sleep(remaining)
 
         self.finished_ok.emit(True)
+
+
+# ---------------------------------------------------------------------------
+# Worker gửi lệnh xoay bậc tự do 4 (θ4) qua UART 2, chạy trong luồng riêng
+# ---------------------------------------------------------------------------
+#
+# Trước đây nút mũi tên xoay θ4 gọi thẳng uart2.step_rotate(...) NGAY trong
+# hàm xử lý sự kiện click (tức là chạy trên main/GUI thread). Nếu lệnh này bị
+# chặn (chờ ACK từ STM32, cổng serial bận, timeout...) dù chỉ vài trăm ms,
+# toàn bộ giao diện sẽ đơ (không vẽ lại được, không phản hồi chuột/bàn phím)
+# vì Qt event loop bị nghẽn. LinearMotionWorker ở trên đã né được vấn đề này
+# cho jog X/Y/Z bằng cách chạy trong QThread riêng - Dof4RotateWorker áp dụng
+# đúng kiểu mẫu đó cho lệnh xoay θ4.
+# ---------------------------------------------------------------------------
+
+class Dof4RotateWorker(QThread):
+    """Gọi `step_rotate_fn(delta_deg)` (thường là `uart2.step_rotate`) trong
+    một luồng riêng, để thao tác gửi lệnh xoay bậc tự do 4 không làm treo
+    giao diện chính, dù cổng UART có bị chặn/chờ phản hồi.
+
+    Signals:
+        finished_ok(bool) : phát ra sau khi step_rotate_fn trả về. True nếu
+                             kết quả trả về là "truthy" (gửi lệnh thành công),
+                             False nếu robot/driver từ chối lệnh.
+        error(str)        : phát ra khi step_rotate_fn ném exception (ví dụ
+                             cổng serial bị rút giữa chừng).
+    """
+
+    finished_ok = Signal(bool)
+    error = Signal(str)
+
+    def __init__(self, step_rotate_fn, delta_deg, parent=None):
+        super().__init__(parent)
+        self._step_rotate_fn = step_rotate_fn
+        self._delta_deg = delta_deg
+
+    def run(self):
+        try:
+            ok = self._step_rotate_fn(self._delta_deg)
+        except Exception as e:  # noqa: BLE001 - báo lỗi ra ngoài qua signal
+            self.error.emit(str(e))
+            return
+        self.finished_ok.emit(bool(ok))

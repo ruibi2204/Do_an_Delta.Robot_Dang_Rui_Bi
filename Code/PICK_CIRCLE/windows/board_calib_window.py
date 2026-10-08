@@ -81,59 +81,62 @@ RUN_SPEED_DEFAULT = 30
 # bước 3a - cố định, không đổi qua GUI.
 REFERENCE_CAPTURE_WAIT_S = 3.0
 
-# Nút hành động thường (Start/Run/Chọn file/...) - màu XANH DƯƠNG.
+# Nút hành động thường (Start/Run/Chọn file/...) - màu VÀNG NHẠT.
 GRAY_BTN_STYLE = """
 QPushButton#grayActionBtn {
-    background-color: #1976d2;
-    color: #ffffff;
-    border: 2px solid #145ea8;
+    background-color: #fff3b0;
+    color: #1a1a1a;
+    border: 2px solid #d9b800;
     border-radius: 12px;
     padding: 12px 18px;
     font-weight: 700;
     font-size: 14pt;
     min-height: 40px;
 }
-QPushButton#grayActionBtn:hover { background-color: #1565c0; }
-QPushButton#grayActionBtn:pressed { background-color: #0d47a1; }
-QPushButton#grayActionBtn:disabled { background-color: #a8c8ec; border-color: #90b8e0; color: #f0f5fb; }
+QPushButton#grayActionBtn:hover { background-color: #ffe680; }
+QPushButton#grayActionBtn:pressed { background-color: #f2d24d; }
+QPushButton#grayActionBtn:disabled { background-color: #2a4a75; border-color: #2a4a75; color: #7f93ad; }
 """
 
-# Nút DỪNG / HUỶ (Stop / Cancel) - màu XÁM.
+# Nút DỪNG / HUỶ (Stop / Cancel) - màu XANH DƯƠNG.
 RED_BTN_STYLE = """
 QPushButton#redActionBtn {
-    background-color: #757575;
+    background-color: #0078d4;
     color: #ffffff;
-    border: 2px solid #5a5a5a;
+    border: 2px solid #005fa8;
     border-radius: 12px;
     padding: 12px 18px;
     font-weight: 700;
     font-size: 14pt;
     min-height: 40px;
 }
-QPushButton#redActionBtn:hover { background-color: #616161; }
-QPushButton#redActionBtn:pressed { background-color: #4d4d4d; }
-QPushButton#redActionBtn:disabled { background-color: #bdbdbd; border-color: #a0a0a0; color: #f0f0f0; }
+QPushButton#redActionBtn:hover { background-color: #005fa8; }
+QPushButton#redActionBtn:pressed { background-color: #00477e; }
+QPushButton#redActionBtn:disabled { background-color: #2a4a75; border-color: #2a4a75; color: #7f93ad; }
 """
 
 # Style chung cho các ô nhập liệu / label trong panel bên phải, để chữ to
-# rõ ràng hơn và không bị tràn / bị cắt như trước.
+# rõ ràng hơn và không bị tràn / bị cắt như trước. Đã chỉnh cho nền TỐI.
 INPUT_STYLE = """
 QLineEdit, QSpinBox, QDoubleSpinBox {
     font-size: 12pt;
     padding: 6px 8px;
     min-height: 30px;
-    border: 1px solid #b0b0b0;
+    border: 2px solid #2a4a75;
     border-radius: 6px;
-    background-color: #ffffff;
+    background-color: #0f2540;
+    color: #e8f1ff;
 }
 QLabel {
     font-size: 12pt;
+    color: #e8f1ff;
 }
 QGroupBox {
     font-size: 12.5pt;
     font-weight: 700;
     margin-top: 14px;
     padding-top: 14px;
+    color: #e8f1ff;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
@@ -143,12 +146,21 @@ QGroupBox::title {
 QProgressBar {
     font-size: 11pt;
     min-height: 24px;
+    border: 2px solid #2a4a75;
+    border-radius: 6px;
+    background-color: #0f2540;
+    color: #e8f1ff;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background-color: #0078d4;
+    border-radius: 4px;
 }
 """
 
 
 def _make_blue_button(text):
-    """Nút hành động thường - màu XANH DƯƠNG (giữ tên hàm cũ để không phải
+    """Nút hành động thường - màu VÀNG NHẠT (giữ tên hàm cũ để không phải
     sửa lại toàn bộ nơi gọi bên dưới)."""
     btn = QPushButton(text)
     btn.setObjectName("grayActionBtn")
@@ -158,7 +170,7 @@ def _make_blue_button(text):
 
 
 def _make_stop_button(text):
-    """Nút DỪNG / HUỶ - màu XÁM."""
+    """Nút DỪNG / HUỶ - màu XANH DƯƠNG."""
     btn = QPushButton(text)
     btn.setObjectName("redActionBtn")
     btn.setStyleSheet(RED_BTN_STYLE)
@@ -690,7 +702,7 @@ class BoardCalibWindow(BaseTabWindow):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(640, 420)
         self.video_label.setStyleSheet(
-            "background-color:#ffffff; border:2px solid #c0c0c0; border-radius:10px; color:#888888;"
+            "background-color:#0f2540; border:2px solid #2a4a75; border-radius:10px; color:#9fb6d6;"
         )
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         video_col.addWidget(self.video_label, 1)
@@ -789,7 +801,7 @@ class BoardCalibWindow(BaseTabWindow):
 
         self.lbl_step_status = QLabel("BƯỚC 1/3: CHƯA CHỤP ẢNH.")
         self.lbl_step_status.setWordWrap(True)
-        self.lbl_step_status.setStyleSheet("color:#333333; font-weight:600;")
+        self.lbl_step_status.setStyleSheet("color:#cfe3ff; font-weight:600;")
         l3.addWidget(self.lbl_step_status, 4, 0, 1, 2)
 
         self.btn_capture_ref = _make_blue_button("📷 1. CHỤP ẢNH CHUẨN")
@@ -862,7 +874,7 @@ class BoardCalibWindow(BaseTabWindow):
 
         self.lbl_run_speed_value = QLabel(f"{self.slider_run_speed.value()} mm/s")
         self.lbl_run_speed_value.setAlignment(Qt.AlignCenter)
-        self.lbl_run_speed_value.setStyleSheet("font-size:12pt; font-weight:600; color:#0a5b8a;")
+        self.lbl_run_speed_value.setStyleSheet("font-size:12pt; font-weight:600; color:#4da6ff;")
         l4.addWidget(self.lbl_run_speed_value, 8, 0, 1, 2)
 
         self.progress_run = QProgressBar()

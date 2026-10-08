@@ -119,6 +119,13 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.holding_object = False
         self._held_object_angle = None
 
+        # Bias đã LƯU lần cuối (đọc từ ctx.cfg lúc khởi động, tức đúng giá
+        # trị đang nằm trong robot_config.json). Dùng để so sánh với bias
+        # ĐANG HỌC (live, có thể khác nếu người dùng chưa bấm nút LƯU BIAS)
+        # và hiển thị trạng thái "đã lưu"/"chưa lưu" trên giao diện.
+        self._last_saved_bias_pick = float(self.ctx.cfg.get("run4dof_bias_pick", 0.0))
+        self._last_saved_bias_place = float(self.ctx.cfg.get("run4dof_bias_place", 0.0))
+
         # ==================================================================
         # ĐẾM CHU TRÌNH ĐỂ TỰ ĐỘNG HIỆU CHỈNH LẠI ĐỘ CHÍNH XÁC
         # ==================================================================
@@ -158,8 +165,8 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(720, 480)
         self.video_label.setStyleSheet(
-            "background-color:#ffffff; border:2px solid #c0c0c0; "
-            "border-radius:10px; color:#888888;"
+            "background-color:#0f2540; border:2px solid #2a4a75; "
+            "border-radius:10px; color:#9fb6d6;"
         )
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         video_col.addWidget(self.video_label, 5)
@@ -201,7 +208,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
         # ---------- Cột điều khiển ----------
         ctrl_col = QVBoxLayout()
 
-        # ---------- THANH TRƯỢT TỐC ĐỘ (mới) ----------
+        # ---------- THANH TRƯỢT TỐC ĐỘ ----------
         speed_box = QGroupBox("TỐC ĐỘ DI CHUYỂN (CHUNG / PICK / PLACE)")
         speed_box.setObjectName("compactBox")
         speed_box.setMaximumHeight(76)
@@ -263,6 +270,40 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
         coord_box.setLayout(coord_layout)
         ctrl_col.addWidget(coord_box)
+
+        # ---------- Khung BIAS TỰ HỌC + nút LƯU thủ công ----------
+        # Theo yêu cầu: KHÔNG tự động lưu bias sau mỗi chu trình nữa (xem
+        # _on_place_phase_done/on_stop - đã bỏ auto-save). Người dùng chạy
+        # thực nghiệm tự do, quan sát bias hội tụ qua label + overlay trên
+        # camera, và chỉ bấm "LƯU BIAS" khi thấy bộ số ổn định/ưng ý.
+        bias_box = QGroupBox("BIAS TỰ HỌC (mâm xoay)")
+        bias_box.setObjectName("compactBox")
+        bias_layout = QVBoxLayout()
+        bias_layout.setSpacing(6)
+
+        bias_row = QHBoxLayout()
+        self.lbl_bias_pick = QLabel("PICK: +0.000s")
+        self.lbl_bias_pick.setStyleSheet("font-weight:700;")
+        self.lbl_bias_place = QLabel("PLACE: +0.000s")
+        self.lbl_bias_place.setStyleSheet("font-weight:700;")
+        bias_row.addWidget(self.lbl_bias_pick, 1)
+        bias_row.addWidget(self.lbl_bias_place, 1)
+        bias_layout.addLayout(bias_row)
+
+        self.lbl_bias_saved_state = QLabel("(chưa có dữ liệu)")
+        self.lbl_bias_saved_state.setStyleSheet("color:#9fb6d6;")
+        bias_layout.addWidget(self.lbl_bias_saved_state)
+
+        self.btn_save_bias = QPushButton("💾 LƯU BIAS HIỆN TẠI")
+        self.btn_save_bias.setObjectName("saveBtn")
+        self.btn_save_bias.setStyleSheet(
+            "QPushButton#saveBtn { font-size: 11pt; min-height: 34px; max-height: 34px; padding: 4px 6px; }"
+        )
+        self.btn_save_bias.clicked.connect(self.on_save_bias_clicked)
+        bias_layout.addWidget(self.btn_save_bias)
+
+        bias_box.setLayout(bias_layout)
+        ctrl_col.addWidget(bias_box)
 
         # ---------- Khung HIỆU CHỈNH ĐỊNH KỲ ----------
         recal_box = QGroupBox("HIỆU CHỈNH ĐỊNH KỲ (TỰ VỀ HOME)")
@@ -352,6 +393,13 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
         # KHÔNG scale CONTROL_HZ / MAX_STEP_MM: hai tham số này quyết định
         # độ mịn và độ thẳng của quỹ đạo, cần giữ nguyên ở mọi tốc độ.
+        #
+        # LƯU Ý: không cần đồng bộ lại gì cho vision/camera_run4dof.py ở
+        # đây. Module vision giữ THAM CHIẾU tới chính planner_run4dof (đã
+        # gán 1 lần qua set_planner() khi mở camera - xem on_open_camera),
+        # nên solve_rendezvous() ở tầng vision tự đọc TIME_MOVE_*_PICK/
+        # PLACE mới nhất ngay từ lần dự đoán kế tiếp, không có độ trễ
+        # đồng bộ nào cả.
         self.ctx.planner_run4dof.update_speed_params(scaled_params)
 
         self.ctx.cfg["run4dof_speed_percent"] = value
@@ -427,6 +475,101 @@ class DynamicRun4DofWindow(BaseTabWindow):
         except Exception as e:
             self._append_log(f"⚠ Không đồng bộ được RPM cho dự đoán ảnh: {e}")
 
+    def _sync_planner_to_vision(self):
+        """Trỏ vision/camera_run4dof.py về ĐÚNG planner đang điều khiển
+        robot (ctx.planner_run4dof), để solve_rendezvous() tính delay dự
+        đoán theo ĐÚNG tốc độ hiện hành + ĐÚNG khoảng cách từng vật/khung -
+        thay cho GRASP_DELAY_S cố định trước đây (sai module nguồn, sai bộ
+        tốc độ, không cập nhật khi đổi tốc độ qua thanh trượt). Giống hệt
+        mẫu hình _sync_table_rpm_to_vision ở trên. Vì planner là object
+        mutable, chỉ cần gán tham chiếu 1 LẦN duy nhất ở đây - không cần
+        gọi lại trong _on_speed_slider_changed hay bất kỳ đâu khác."""
+        try:
+            from vision.camera_run4dof import set_planner
+            set_planner(self.ctx.planner_run4dof)
+        except Exception as e:
+            self._append_log(f"⚠ Không đồng bộ được planner cho dự đoán ảnh: {e}")
+
+    def _restore_saved_bias(self):
+        """Nạp lại bias đã học từ lần chạy trước (lưu trong
+        ctx.cfg["run4dof_bias_pick"/"run4dof_bias_place"], đọc từ
+        robot_config.json lúc load_config()). Gọi 1 lần khi mở camera,
+        NGAY SAU _sync_planner_to_vision(), để không phải học lại từ 0
+        mỗi lần mở app - đúng theo yêu cầu lưu bền vững qua các phiên."""
+        try:
+            from vision.camera_run4dof import set_bias
+            bias_pick = float(self.ctx.cfg.get("run4dof_bias_pick", 0.0))
+            bias_place = float(self.ctx.cfg.get("run4dof_bias_place", 0.0))
+            set_bias(bias_pick, bias_place)
+            if bias_pick != 0.0 or bias_place != 0.0:
+                self._append_log(
+                    f"↺ Đã nạp lại bias đã học lần trước: "
+                    f"PICK={bias_pick:+.3f}s PLACE={bias_place:+.3f}s"
+                )
+            self._update_bias_labels()
+        except Exception as e:
+            self._append_log(f"⚠ Không nạp lại được bias đã lưu: {e}")
+
+    def _save_bias_to_config(self):
+        """Lưu bias hiện tại (đã được EMA cập nhật qua report_actual_delay)
+        vào ctx.cfg rồi ghi xuống robot_config.json. CHỈ được gọi từ
+        on_save_bias_clicked() (nút "LƯU BIAS HIỆN TẠI") - KHÔNG còn tự
+        động gọi sau mỗi chu trình như trước, theo đúng yêu cầu: người
+        dùng chạy thực nghiệm tự do, chỉ lưu khi thấy bộ số ổn định/ưng ý."""
+        try:
+            from vision.camera_run4dof import get_bias_snapshot
+            bias_pick, bias_place = get_bias_snapshot()
+            self.ctx.cfg["run4dof_bias_pick"] = bias_pick
+            self.ctx.cfg["run4dof_bias_place"] = bias_place
+            save_config(self.ctx.cfg)
+        except Exception as e:
+            self._append_log(f"⚠ Không lưu được bias đã học: {e}")
+
+    def on_save_bias_clicked(self):
+        """Xử lý nút '💾 LƯU BIAS HIỆN TẠI' - ghi snapshot bias ĐANG HỌC
+        (live) xuống robot_config.json, cập nhật mốc _last_saved_bias_*
+        để label chuyển sang trạng thái 'Đã lưu'."""
+        self._save_bias_to_config()
+        try:
+            from vision.camera_run4dof import get_bias_snapshot
+            self._last_saved_bias_pick, self._last_saved_bias_place = get_bias_snapshot()
+        except Exception:
+            pass
+        self._append_log(
+            f"💾 Đã lưu bias hiện tại vào robot_config.json: "
+            f"PICK={self._last_saved_bias_pick:+.3f}s PLACE={self._last_saved_bias_place:+.3f}s"
+        )
+        self._update_bias_labels()
+
+    def _update_bias_labels(self):
+        """Đọc snapshot bias ĐANG HỌC (live) từ vision module và đẩy việc
+        cập nhật widget về MAIN THREAD qua QTimer.singleShot - vì hàm này
+        có thể được gọi từ worker thread (on_grasp_moment chạy trong luồng
+        FnWorker, không phải main thread Qt), giống cách _append_log đã
+        làm. Gọi định kỳ sau mỗi lần report_actual_delay và sau khi nạp
+        lại bias lúc mở camera, để label luôn phản ánh giá trị mới nhất."""
+        try:
+            from vision.camera_run4dof import get_bias_snapshot
+            bias_pick, bias_place = get_bias_snapshot()
+        except Exception:
+            return
+        QTimer.singleShot(0, lambda: self._apply_bias_labels(bias_pick, bias_place))
+
+    def _apply_bias_labels(self, bias_pick, bias_place):
+        self.lbl_bias_pick.setText(f"PICK: {bias_pick:+.3f}s")
+        self.lbl_bias_place.setText(f"PLACE: {bias_place:+.3f}s")
+
+        is_saved = (
+            abs(bias_pick - self._last_saved_bias_pick) < 1e-6
+            and abs(bias_place - self._last_saved_bias_place) < 1e-6
+        )
+        if is_saved:
+            self.lbl_bias_saved_state.setText("✔ Đã lưu (khớp với robot_config.json)")
+            self.lbl_bias_saved_state.setStyleSheet("color:#4cd98a; font-weight:700;")
+        else:
+            self.lbl_bias_saved_state.setText('● CHƯA LƯU - bấm "LƯU BIAS HIỆN TẠI" nếu muốn giữ lại')
+            self.lbl_bias_saved_state.setStyleSheet("color:#e0a13a; font-weight:700;")
+
     def _refresh_turn_label(self):
         if self.ctx.turn_state:
             self.lbl_turn_state.setText("● Đang BẬT")
@@ -443,6 +586,19 @@ class DynamicRun4DofWindow(BaseTabWindow):
         if self._camera_thread is not None:
             return
         self.btn_cam_open.setEnabled(False)
+
+        # Đồng bộ planner cho vision TRƯỚC khi mở luồng camera, để ngay
+        # frame đầu tiên solve_rendezvous() đã có planner để tính delay
+        # đúng theo khoảng cách/tốc độ thật, không rơi vào nhánh dự phòng
+        # GRASP_DELAY_S cố định.
+        self._sync_planner_to_vision()
+
+        # Nạp lại bias đã học từ lần chạy trước (nếu có) - PHẢI gọi SAU
+        # _sync_planner_to_vision() vì cùng nằm trong module vision, thứ
+        # tự không bắt buộc về mặt kỹ thuật nhưng giữ đúng logic "đồng bộ
+        # nguồn rồi mới nạp trạng thái đã lưu" cho dễ đọc code.
+        self._restore_saved_bias()
+
         self._camera_thread = CameraRun4DofThread(
             camera_index=self.ctx.cfg.get("camera_index", 0),
             calib_path=self.ctx.cfg.get("calib_file"),
@@ -505,6 +661,29 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
     def _set_phase_label(self, text):
         QTimer.singleShot(0, lambda: self.lbl_phase.setText(f"Trạng thái: {text}"))
+
+    # ---------------- Bias tự học: báo cáo delay thật lên vision ----------------
+    def _report_actual_delay(self, kind, predicted_delay_s, t_capture_perf, t_actual_perf):
+        """Đo actual_delay_s = mốc thời gian THẬT lúc gripper kích hoạt
+        (t_actual_perf, tới từ on_grasp_moment callback trong
+        move_run4dof.py) trừ mốc lúc camera bắt đầu xử lý frame
+        (t_capture_perf, gắn kèm item bởi camera_run4dof.py), rồi báo cho
+        bộ lọc EMA (report_actual_delay) để tự động hiệu chỉnh bias -
+        không cần con người đo/canh lại. Import lazy + try/except để không
+        phá luồng chính nếu vision module có vấn đề."""
+        if predicted_delay_s is None or t_capture_perf is None:
+            return
+        actual_delay_s = t_actual_perf - t_capture_perf
+        try:
+            from vision.camera_run4dof import report_actual_delay
+            report_actual_delay(kind, predicted_delay_s, actual_delay_s)
+            self._append_log(
+                f"↺ [BIAS-{kind.upper()}] dự đoán={predicted_delay_s:.3f}s "
+                f"thật={actual_delay_s:.3f}s (lệch={actual_delay_s - predicted_delay_s:+.3f}s)"
+            )
+            self._update_bias_labels()
+        except Exception as e:
+            self._append_log(f"⚠ Không báo cáo được delay thật cho bias tự học: {e}")
 
     # ---------------- START / STOP vòng lặp gắp-thả tự động ----------------
     def on_start(self):
@@ -591,6 +770,12 @@ class DynamicRun4DofWindow(BaseTabWindow):
         obj_y = obj.get("y_mm_grasp", obj["y_mm"])
         obj_angle = obj.get("angle_deg_grasp", obj.get("angle_deg"))
 
+        # Mốc + delay dự đoán gắn kèm item bởi camera_run4dof.py (xem
+        # solve_rendezvous / item["_predicted_delay_s"], item["_t_capture_perf"]).
+        # Dùng để đo delay THẬT sau khi gripper kích hoạt, phục vụ bias tự học.
+        predicted_delay_s = obj.get("_predicted_delay_s")
+        t_capture_perf = obj.get("_t_capture_perf")
+
         self._append_log(
             f"→ [PICK] Gắp vật (dự đoán) tại ({obj_x:.1f},{obj_y:.1f}) "
             f"góc {obj_angle:.1f}° - chưa cần khung."
@@ -599,12 +784,22 @@ class DynamicRun4DofWindow(BaseTabWindow):
         point_a = (obj_x + offset_x, obj_y + offset_y)
         self._held_object_angle = obj_angle
 
+        def on_grasp_moment(t_grasp_perf):
+            # Được gọi TỪ THREAD WORKER (không phải main thread Qt) ngay
+            # sau khi gripper thực sự kích hoạt trong move_run4dof.py.
+            # _report_actual_delay chỉ tính toán + gọi hàm thuần Python ở
+            # vision module (không đụng widget Qt trực tiếp) nên an toàn
+            # gọi thẳng từ đây; log hiển thị qua _append_log đã tự đẩy về
+            # main thread bằng QTimer.singleShot.
+            self._report_actual_delay("pick", predicted_delay_s, t_capture_perf, t_grasp_perf)
+
         def task():
             with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log(s))):
                 self.ctx.planner_run4dof.pick_dof4(
                     point_a,
                     z_pick=z_pick,
                     gripper_callback=self.ctx.gripper_callback,
+                    on_grasp_moment=on_grasp_moment,
                 )
             return True
 
@@ -643,6 +838,9 @@ class DynamicRun4DofWindow(BaseTabWindow):
         hole_y = hole.get("y_mm_grasp", hole["y_mm"])
         hole_angle = hole.get("angle_deg_grasp", hole.get("angle_deg", 90.0))
 
+        predicted_delay_s = hole.get("_predicted_delay_s")
+        t_capture_perf = hole.get("_t_capture_perf")
+
         self._append_log(
             f"→ [PLACE] Đặt vào Lỗ #{hole.get('slot_id')} (dự đoán) "
             f"({hole_x:.1f},{hole_y:.1f}) góc {hole_angle:.1f}°"
@@ -650,6 +848,9 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
         place_point = (hole_x + offset_x, hole_y + offset_y)
         object_angle_deg = self._held_object_angle
+
+        def on_grasp_moment(t_place_perf):
+            self._report_actual_delay("place", predicted_delay_s, t_capture_perf, t_place_perf)
 
         def task():
             with contextlib.redirect_stdout(StreamToSignal(lambda s: self._append_log(s))):
@@ -660,6 +861,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
                     rotate_callback=self.ctx.pneu_uart.step_rotate,
                     object_angle_deg=object_angle_deg,
                     target_angle_deg=hole_angle,
+                    on_grasp_moment=on_grasp_moment,
                 )
             return True
 
@@ -681,6 +883,14 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self._set_phase_label("đang chờ thấy VẬT...")
 
         if ok:
+            # LƯU Ý: KHÔNG tự động lưu bias xuống robot_config.json ở đây
+            # nữa. Bias vẫn tiếp tục học (EMA cập nhật qua report_actual_delay
+            # ở on_grasp_moment của cả 2 pha), label + overlay trên camera
+            # vẫn hiển thị giá trị LIVE mới nhất - nhưng chỉ được GHI XUỐNG
+            # ĐĨA khi người dùng chủ động bấm nút "💾 LƯU BIAS HIỆN TẠI"
+            # (on_save_bias_clicked). Mục đích: cho phép chạy thực nghiệm
+            # tự do với nhiều bộ tham số khác nhau mà không lo bias "rác"
+            # của lần thử trước bị ghi đè vào file cấu hình ngoài ý muốn.
             self.completed_cycles += 1
             self._refresh_recal_progress_label()
             if self._maybe_trigger_periodic_recalibration():
@@ -753,6 +963,10 @@ class DynamicRun4DofWindow(BaseTabWindow):
             return
         self.running = False
         self.btn_stop.setEnabled(False)
+
+        # LƯU Ý: KHÔNG tự động lưu bias khi bấm STOP nữa. Nếu muốn giữ lại
+        # bias vừa học được trong phiên chạy này, bấm nút "💾 LƯU BIAS HIỆN
+        # TẠI" TRƯỚC KHI bấm STOP (hoặc bất cứ lúc nào trong lúc đang chạy).
         if self.holding_object:
             self._append_log(
                 "⚠ Đang dừng khi TAY GẮP CÒN GIỮ VẬT (chưa thấy khung để thả) "

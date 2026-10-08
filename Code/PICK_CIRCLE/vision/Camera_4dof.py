@@ -26,7 +26,7 @@ FRAME_HOLE_COUNT_EXPECTED = 8
 #   'black' -> lỗ trên khung
 _CIRCLE_CALIB = {
     'white': {'scale': 0.295, 'intercept': 1.0},
-    'black': {'scale': 0.305, 'intercept': 1.0},
+    'black': {'scale': 0.304, 'intercept': 1.0},
 }
 
 DET_SCALE = 0.5

@@ -1,60 +1,40 @@
 import time
 import math
+import threading
 import numpy as np
 from kinematics.dhnghich import inverse_kinematics
 
 # =====================================================================
-# LƯU Ý (kế thừa từ move_delta_4dof.py bản an toàn):
-# File này KHÔNG import Uart_2 trực tiếp. Mọi điều khiển bơm và bậc tự do
-# 4 (bàn xoay) đều đi qua callback do nơi gọi (GUI) truyền vào, để chỉ có
-# DUY NHẤT một kết nối UART2 (do GUI quản lý) trong toàn ứng dụng - tránh
-# lỗi "Access is denied" do mở trùng cổng COM.
-# =====================================================================
+# move_delta_4dof.py — PLANNER CHUYỂN ĐỘNG ROBOT DELTA 3 BẬC + BÀN XOAY (DOF4)
 #
-# CẬP NHẬT (làm thẳng quỹ đạo):
-# Trước đây số điểm nội suy gửi đi (n_steps) chỉ phụ thuộc THỜI GIAN di
-# chuyển (wait_s * CONTROL_HZ). Với đoạn đường DÀI nhưng thời gian NGẮN
-# (ví dụ TIME_MOVE_ACTION = 0.25s), số điểm gửi có thể rất ít -> khoảng
-# cách Cartesian giữa 2 điểm liên tiếp lớn. Vì driver/servo nội suy góc
-# khớp giữa 2 lệnh liên tiếp theo KHÔNG GIAN KHỚP (không phải không gian
-# X-Y-Z), quỹ đạo thực tế bị cong ra khỏi đường thẳng lý tưởng dù thuật
-# toán nội suy trong phần mềm là tuyến tính hoàn toàn đúng trong Cartesian.
+# Logic chuyển động giống hệt move_delta3dof.py (nội suy đường thẳng +
+# S-curve, MAX_STEP_MM, ngắt khẩn khi DỪNG), thêm bậc tự do 4 (xoay).
 #
-# Cách khắc phục: thêm giới hạn MAX_STEP_MM - khoảng cách Cartesian tối đa
-# cho phép giữa 2 điểm gửi liên tiếp. Số bước thực tế = max(số bước theo
-# thời gian, số bước theo khoảng cách). Nhờ vậy các đoạn dài sẽ tự động
-# được chia nhỏ hơn (và có thể mất nhiều hơn wait_s một chút), đảm bảo
-# quỹ đạo luôn bám sát đường thẳng bất kể tốc độ đặt ra.
+# Trình tự gắp-thả TỐI GIẢN:
+#   Z_SAFE (cố định) -> hạ Z_PICK -> hút -> nhấc Z_SAFE -> XOAY DOF4 ->
+#   sang B -> hạ Z_PLACE -> nhả -> nhấc Z_SAFE -> XOAY NGƯỢC -> HOME
+#
+# File này KHÔNG import Uart_2 trực tiếp. Bơm hút và bàn xoay đều đi qua
+# callback do GUI truyền vào, để chỉ có DUY NHẤT một kết nối UART2.
+#
+# self.current_pos = None nghĩa là "không biết robot đang ở đâu".
 # =====================================================================
 
-# ---------------------------------------------------------------------
-# GIÁ TRỊ MẶC ĐỊNH của các tham số thời gian/tốc độ. Đây chỉ còn là giá
-# trị dự phòng (fallback) khi không có tham số nào được truyền vào từ
-# GUI (khung "THAM SỐ TỐC ĐỘ" trong main.py). DeltaMotionPlanner giờ đọc
-# các giá trị này thành THUỘC TÍNH RIÊNG của từng instance
-# (self.TIME_MOVE_FAST, ...), cho phép GUI ghi đè lúc khởi tạo hoặc lúc
-# chạy (qua update_speed_params) mà không cần sửa code.
-# ---------------------------------------------------------------------
-TIME_MOVE_FAST = 1
+TIME_MOVE_FAST = 1.0
 TIME_MOVE_DOWN = 0.5
 TIME_MOVE_ACTION = 0.5
 TIME_DELAY_GRIPPER = 0.5
-TIME_DELAY_DOF4 = 0.5   # Thời gian chờ bàn xoay/step quay xong
+TIME_DELAY_DOF4 = 0.5   # Thời gian chờ bàn xoay quay xong
 
-# Tần số gửi lệnh điều khiển (Hz) — CỐ ĐỊNH bất kể đoạn dài hay ngắn.
-# Đây là điểm khác biệt chính so với bản step_mm: số điểm gửi phụ thuộc
-# THỜI GIAN di chuyển (wait_s), không phụ thuộc khoảng cách -> không còn
-# tình trạng đoạn dài bị dồn quá nhiều lệnh trong thời gian ngắn.
+# Tần số gửi lệnh điều khiển (Hz) — cố định.
 CONTROL_HZ = 100.0
 
-# Khoảng cách Cartesian tối đa (mm) cho phép giữa 2 điểm gửi liên tiếp.
-# Đây là tham số MỚI để làm thẳng quỹ đạo: nếu đoạn di chuyển dài mà thời
-# gian ngắn khiến khoảng cách giữa 2 điểm > giá trị này, số bước sẽ tự
-# động tăng lên (bất kể wait_s) để đảm bảo độ mịn/thẳng của đường đi.
+# Khoảng cách Cartesian tối đa (mm) giữa 2 điểm gửi liên tiếp.
 MAX_STEP_MM = 3.0
 
-# Danh sách tên các tham số tốc độ mà GUI (khung "THAM SỐ TỐC ĐỘ") có thể
-# ghi đè. Dùng chung một danh sách để tránh gõ nhầm tên khóa ở nhiều nơi.
+# Thời gian (s) giữ/gửi lặp lệnh HOME sau khi đã tới nơi.
+HOME_HOLD_S = 0.3
+
 SPEED_PARAM_KEYS = (
     "TIME_MOVE_FAST",
     "TIME_MOVE_DOWN",
@@ -70,29 +50,27 @@ class MotionError(Exception):
     pass
 
 
+class MotionAborted(Exception):
+    """Người dùng nhấn DỪNG giữa chừng (request_abort()). Không kế thừa
+    MotionError để không bị nhầm với lỗi gửi lệnh."""
+    pass
+
+
 class DeltaMotionPlanner:
 
     def __init__(self, uart_comm=None, speed_params=None):
-        """
-        uart_comm: đối tượng UART2 do GUI quản lý (hoặc None để chạy dry-run).
-        speed_params: dict tùy chọn chứa các tham số tốc độ lấy từ khung
-            "THAM SỐ TỐC ĐỘ" trên giao diện (ctx.speed_params), gồm các khóa
-            trong SPEED_PARAM_KEYS. Khóa nào không có trong dict sẽ dùng giá
-            trị mặc định của module (các hằng số ở đầu file).
-        """
         self.uart = uart_comm
-        self.HOME = (60.0, 0.0, 300.0)
-        self.Z_SAFE = 290.0
-        # LƯU Ý: self.HOME chỉ là giá trị MẶC ĐỊNH cứng. Nơi gọi (GUI) nên
-        # gọi set_home(*ctx.home_pos) khi bắt đầu 1 phiên chạy để move_home()
-        # đưa robot về đúng vị trí Home ĐÃ LƯU ở tab MANUAL thay vì tọa độ
-        # cố định này - xem set_home() bên dưới.
-        self.current_pos = self.HOME  # theo dõi vị trí hiện tại để nội suy đường thẳng
+        self.HOME = (60.0, 0.0, 280.0)
+        self.Z_SAFE = 290.0           # độ cao di chuyển an toàn, cố định
+        self.current_pos = self.HOME  # None = không rõ vị trí thật
+        self._abort = threading.Event()
+        self._rot_applied = 0.0       # tổng góc DOF4 đã xoay trong chu trình
 
-        # Khởi tạo các tham số tốc độ dạng thuộc tính riêng của instance,
-        # để có thể đọc lại/ghi đè lúc chạy mà không đụng tới hằng số module.
         self._init_speed_params(speed_params)
 
+    # ------------------------------------------------------------------
+    # THAM SỐ TỐC ĐỘ
+    # ------------------------------------------------------------------
     def _init_speed_params(self, speed_params):
         defaults = {
             "TIME_MOVE_FAST": TIME_MOVE_FAST,
@@ -111,7 +89,7 @@ class DeltaMotionPlanner:
                         if value > 0:
                             defaults[key] = value
                     except (TypeError, ValueError):
-                        pass  # giữ giá trị mặc định nếu dữ liệu không hợp lệ
+                        pass
 
         self.TIME_MOVE_FAST = defaults["TIME_MOVE_FAST"]
         self.TIME_MOVE_DOWN = defaults["TIME_MOVE_DOWN"]
@@ -123,31 +101,83 @@ class DeltaMotionPlanner:
         self.MAX_STEP_MM = defaults["MAX_STEP_MM"]
 
     def update_speed_params(self, speed_params):
-        """Cho phép GUI cập nhật lại tham số tốc độ ngay cả khi
-        DeltaMotionPlanner đã được tạo (ví dụ sau khi người dùng bấm
-        "Lưu tham số" ở khung THAM SỐ TỐC ĐỘ, hoặc kéo thanh trượt tốc độ).
-        Chỉ những khóa hợp lệ (số thực > 0) mới được áp dụng, các khóa còn
-        lại giữ nguyên."""
+        """Cập nhật tham số tốc độ lúc chạy (thanh trượt tốc độ). Khóa lạ
+        hoặc giá trị không hợp lệ (<= 0) sẽ bị bỏ qua."""
         self._init_speed_params({
-            **{
-                "TIME_MOVE_FAST": self.TIME_MOVE_FAST,
-                "TIME_MOVE_DOWN": self.TIME_MOVE_DOWN,
-                "TIME_MOVE_ACTION": self.TIME_MOVE_ACTION,
-                "TIME_DELAY_GRIPPER": self.TIME_DELAY_GRIPPER,
-                "TIME_DELAY_DOF4": self.TIME_DELAY_DOF4,
-                "CONTROL_HZ": self.CONTROL_HZ,
-                "MAX_STEP_MM": self.MAX_STEP_MM,
-            },
+            "TIME_MOVE_FAST": self.TIME_MOVE_FAST,
+            "TIME_MOVE_DOWN": self.TIME_MOVE_DOWN,
+            "TIME_MOVE_ACTION": self.TIME_MOVE_ACTION,
+            "TIME_DELAY_GRIPPER": self.TIME_DELAY_GRIPPER,
+            "TIME_DELAY_DOF4": self.TIME_DELAY_DOF4,
+            "CONTROL_HZ": self.CONTROL_HZ,
+            "MAX_STEP_MM": self.MAX_STEP_MM,
             **(speed_params or {}),
         })
 
+    # ------------------------------------------------------------------
+    # NGẮT KHẨN (nút DỪNG)
+    # ------------------------------------------------------------------
+    def request_abort(self):
+        """Gọi từ luồng GUI: yêu cầu ngắt chuyển động đang chạy NGAY. Chu
+        trình gắp-thả sẽ nhấc lên độ cao an toàn, về HOME, tắt bơm và xoay
+        bàn xoay về vị trí cũ."""
+        self._abort.set()
+
+    def clear_abort(self):
+        self._abort.clear()
+
+    def _check_abort(self):
+        if self._abort.is_set():
+            raise MotionAborted()
+
+    def _sleep(self, seconds):
+        """time.sleep có thể bị ngắt bởi request_abort()."""
+        end = time.perf_counter() + max(seconds, 0.0)
+        while True:
+            self._check_abort()
+            remaining = end - time.perf_counter()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.02))
+
+    # ------------------------------------------------------------------
+    # HOME / VỊ TRÍ
+    # ------------------------------------------------------------------
     def set_home(self, x, y, z):
-        """Cập nhật lại HOME (ví dụ đồng bộ với ctx.home_pos đã lưu ở tab
-        MANUAL). Gọi hàm này ở đầu on_start() của window - giống cách các
-        window khác đang gán ctx.current_pos = list(ctx.home_pos) - để mọi
-        lần move_home()/_try_safe_retreat() sau đó đưa robot về ĐÚNG vị trí
-        Home thực tế thay vì tọa độ mặc định cứng (60, 0, 300)."""
+        """Đồng bộ HOME với vị trí đã lưu (ctx.home_pos)."""
         self.HOME = (float(x), float(y), float(z))
+
+    def invalidate_position(self):
+        """Robot đã bị di chuyển NGOÀI planner này -> không còn biết vị trí
+        thật. Lần di chuyển kế tiếp sẽ gửi thẳng tới đích."""
+        self.current_pos = None
+
+    def _connection_ok(self):
+        """Báo lỗi RÕ RÀNG khi Serial chưa kết nối, thay vì giả vờ thành công
+        ở chế độ [MOVE-DRY] (robot không hề nhúc nhích)."""
+        uart = self.uart
+        if uart is None:
+            return True  # chạy mô phỏng có chủ đích
+        if getattr(uart, "dry_run", False):
+            return True
+        if not getattr(uart, "is_connected", False):
+            print("[LỖI] Robot CHƯA kết nối Serial -> không gửi được lệnh. "
+                  "Hãy kết nối ở tab Kết nối trước.")
+            return False
+        return True
+
+    def _hold_target(self, x, y, z, duration_s):
+        """Gửi lặp điểm (x, y, z) ở CONTROL_HZ trong duration_s giây."""
+        n = max(int(duration_s * self.CONTROL_HZ), 1)
+        for _ in range(n):
+            self._check_abort()
+            t0 = time.perf_counter()
+            if not self.send_position(x, y, z):
+                raise MotionError(f"Gửi lệnh tới ({x:.1f}, {y:.1f}, {z:.1f}) thất bại.")
+            remaining = self.CONTROL_DT - (time.perf_counter() - t0)
+            if remaining > 0:
+                time.sleep(remaining)
+        self.current_pos = (x, y, z)
 
     def send_position(self, x, y, z):
         try:
@@ -170,34 +200,33 @@ class DeltaMotionPlanner:
 
     @staticmethod
     def _s_curve(t_frac):
-        """Đường cong S (smoothstep bậc 5) cho tỉ lệ tiến trình t_frac trong [0,1].
-        Cho vận tốc = 0 tại đầu và cuối đoạn, tăng/giảm tốc êm ở giữa -> khử
-        cảm giác giật/khựng khi bắt đầu và kết thúc mỗi đoạn di chuyển."""
+        """Smoothstep bậc 5: vận tốc = 0 ở đầu và cuối đoạn."""
         t = min(max(t_frac, 0.0), 1.0)
-        return t * t * t * (t * (t * 6 - 15) + 10)  # 6t^5 - 15t^4 + 10t^3
+        return t * t * t * (t * (t * 6 - 15) + 10)
 
     def _move_or_raise(self, x, y, z, wait_s):
-        """Di chuyển từ self.current_pos tới (x, y, z) trong khoảng thời gian
-        wait_s, gửi lệnh với tần số cố định self.CONTROL_HZ và áp dụng S-curve
-        để chuyển động mượt, không giật cục dù đoạn ngắn hay dài.
+        """Di chuyển từ current_pos tới (x, y, z) trong wait_s giây, gửi lệnh
+        ở CONTROL_HZ với S-curve. n_steps = max(theo thời gian, theo khoảng
+        cách / MAX_STEP_MM) để quỹ đạo bám sát đường thẳng.
 
-        Số bước nội suy (n_steps) được lấy theo giá trị LỚN HƠN giữa:
-          - số bước theo THỜI GIAN  (wait_s * CONTROL_HZ)
-          - số bước theo KHOẢNG CÁCH (distance / MAX_STEP_MM)
-        Điều này đảm bảo khoảng cách Cartesian giữa 2 điểm gửi liên tiếp
-        không bao giờ vượt quá MAX_STEP_MM, kể cả khi đoạn đường dài mà
-        thời gian di chuyển ngắn -> quỹ đạo thực tế bám sát đường thẳng
-        thay vì bị cong do nội suy góc khớp ở phía driver/servo.
+        current_pos is None -> gửi thẳng tới đích một lần rồi chờ wait_s.
         """
-        p1 = np.array(self.current_pos, dtype=float)
-        p2 = np.array((x, y, z), dtype=float)
         target = (x, y, z)
+
+        if self.current_pos is None:
+            print("[MOVE] Không rõ vị trí hiện tại -> gửi thẳng tới đích.")
+            if not self.send_position(x, y, z):
+                raise MotionError(f"Di chuyển tới ({x:.1f}, {y:.1f}, {z:.1f}) thất bại.")
+            self._sleep(wait_s)
+            self.current_pos = target
+            return
+
+        p1 = np.array(self.current_pos, dtype=float)
+        p2 = np.array(target, dtype=float)
 
         distance = float(np.linalg.norm(p2 - p1))
         if distance < 1e-6:
-            # Không di chuyển thực sự (ví dụ giữ Z), vẫn tôn trọng wait_s để
-            # các bước tiếp theo (gripper, dof4...) không bị lệch timing.
-            time.sleep(wait_s)
+            self._sleep(wait_s)
             self.current_pos = target
             return
 
@@ -206,6 +235,7 @@ class DeltaMotionPlanner:
         n_steps = max(n_steps_time, n_steps_dist)
 
         for i in range(1, n_steps + 1):
+            self._check_abort()
             t_start = time.perf_counter()
 
             frac = self._s_curve(i / n_steps)
@@ -213,10 +243,8 @@ class DeltaMotionPlanner:
 
             if not self.send_position(*point):
                 raise MotionError(f"Di chuyển tới ({x:.1f}, {y:.1f}, {z:.1f}) thất bại.")
+            self.current_pos = point  # theo dõi vị trí thật từng bước
 
-            # Bù thời gian xử lý (tính toán + gửi UART) vào chu kỳ điều khiển,
-            # để tần số gửi lệnh thực tế bám sát self.CONTROL_HZ, tránh chuyển
-            # động bị chậm/lệch khi thời gian gửi UART không phải 0.
             elapsed = time.perf_counter() - t_start
             remaining = self.CONTROL_DT - elapsed
             if remaining > 0:
@@ -225,13 +253,31 @@ class DeltaMotionPlanner:
         self.current_pos = target
 
     def move_home(self):
-        print("--> Đang về Home...")
+        """Về HOME đã lưu. LUÔN gửi lệnh thật xuống robot:
+          - biết vị trí hiện tại và khác HOME -> nội suy S-curve tới HOME;
+          - không biết vị trí (None) hoặc đã ở HOME theo planner -> gửi lặp
+            điểm HOME."""
         x, y, z = self.HOME
+        print(f"--> Đang về Home {self.HOME} (planner nhớ vị trí: {self.current_pos})")
+        if not self._connection_ok():
+            return False
         try:
-            self._move_or_raise(x, y, z, self.TIME_MOVE_FAST)
+            if self.current_pos is not None:
+                dist = float(np.linalg.norm(
+                    np.array(self.current_pos, dtype=float) - np.array((x, y, z), dtype=float)))
+                if dist > 1e-6:
+                    self._move_or_raise(x, y, z, self.TIME_MOVE_FAST)
+                self._hold_target(x, y, z, HOME_HOLD_S)
+            else:
+                self._hold_target(x, y, z, max(self.TIME_MOVE_FAST, 1.0))
+        except MotionAborted:
+            print("[DỪNG] Lệnh về Home bị ngắt.")
+            return False
         except MotionError as e:
             print(f"[LỖI] Gửi lệnh về Home thất bại! Robot có thể vẫn đang ở vị trí cũ. ({e})")
+            self.current_pos = None
             return False
+        print("--> Đã gửi xong lệnh về Home.")
         return True
 
     def _try_safe_retreat(self, x, y):
@@ -242,6 +288,32 @@ class DeltaMotionPlanner:
             print(f"[AN TOÀN] Không thể nhấc lên an toàn: {e}")
         self.move_home()
 
+    def _abort_retreat(self, set_gripper, rotate_callback):
+        """Sau khi bị ngắt giữa chừng: nhấc lên độ cao an toàn tại chỗ, về
+        HOME, TẮT bơm rồi xoay bàn xoay về vị trí ban đầu."""
+        self._abort.clear()  # xóa cờ để các lệnh dưới đây chạy được
+        try:
+            cur = self.current_pos
+            if cur is not None:
+                cx, cy, cz = cur
+                # Z lớn = thấp hơn: chỉ nhấc lên nếu đang thấp hơn Z_SAFE
+                self._move_or_raise(cx, cy, min(cz, self.Z_SAFE), self.TIME_MOVE_DOWN)
+        except Exception as e:
+            print(f"[DỪNG] Không thể nhấc lên an toàn: {e}")
+        self.move_home()
+        try:
+            set_gripper("off")
+        except Exception as e:
+            print(f"[CẢNH BÁO] Tắt bơm sau khi dừng thất bại: {e}")
+        try:
+            if abs(self._rot_applied) > 0.01:
+                self._rotate_dof4(rotate_callback, -self._rot_applied)
+        except Exception as e:
+            print(f"[CẢNH BÁO] Xoay bàn xoay về vị trí cũ thất bại: {e}")
+
+    # ------------------------------------------------------------------
+    # BẬC TỰ DO 4
+    # ------------------------------------------------------------------
     @staticmethod
     def _wrap_angle_180(angle_deg):
         """Đưa góc về [-90, 90) - hình chữ nhật đối xứng 180 độ."""
@@ -258,18 +330,23 @@ class DeltaMotionPlanner:
         print(f"[DOF4] Xoay {degrees:.2f}°")
         try:
             rotate_callback(degrees)
+            self._rot_applied += degrees
         except Exception as e:
             print(f"[CẢNH BÁO] Xoay bậc tự do 4 thất bại: {e}")
-        time.sleep(self.TIME_DELAY_DOF4)
+        self._sleep(self.TIME_DELAY_DOF4)
 
-    def pick_and_place_dof4(self, point_a, z_pick=290, gripper_callback=None,
-                             rotate_callback=None, object_angle_deg=None,
-                             place_point=(0.0, 0.0), target_angle_deg=90.0):
-
+    # ------------------------------------------------------------------
+    # GẮP - THẢ (có xoay bậc 4)
+    # ------------------------------------------------------------------
+    def pick_and_place_dof4(self, point_a, z_pick=290, z_place=None,
+                            gripper_callback=None, rotate_callback=None,
+                            object_angle_deg=None, place_point=(0.0, 0.0),
+                            target_angle_deg=90.0):
         ax, ay = point_a
         bx, by = place_point
-        z_action_pick = z_pick + 10
-        z_action_place = z_pick + 5
+        z_safe = self.Z_SAFE
+        if z_place is None:
+            z_place = z_pick
 
         rotation_needed = None
         if object_angle_deg is not None:
@@ -287,51 +364,61 @@ class DeltaMotionPlanner:
             except Exception as e:
                 raise MotionError(f"Điều khiển gripper ('{state}') thất bại: {e}")
 
+        if not self._connection_ok():
+            raise MotionError("Robot chưa kết nối Serial.")
+
+        self._rot_applied = 0.0
+
         print("=== BẮT ĐẦU QUY TRÌNH GẮP THẢ (4DOF) ===")
         if rotation_needed is not None:
             print(f"[DOF4] Góc vật hiện tại: {object_angle_deg:.2f}° "
                   f"-> cần xoay {rotation_needed:.2f}° để đạt {target_angle_deg:.1f}°")
 
         try:
-            # 1. Đến điểm A trên cao -> hạ Z_pick -> tiến sâu gắp
-            self._move_or_raise(ax, ay, 290, self.TIME_MOVE_FAST)
+            # 1. Tới điểm A ở Z safe -> hạ xuống Z pick -> hút
+            self._move_or_raise(ax, ay, z_safe, self.TIME_MOVE_FAST)
             self._move_or_raise(ax, ay, z_pick, self.TIME_MOVE_DOWN)
-            self._move_or_raise(ax, ay, z_action_pick, self.TIME_MOVE_ACTION)
 
             print("[GRIPPER] Bật hút/kẹp vật")
             set_gripper("on")
-            time.sleep(self.TIME_DELAY_GRIPPER)
+            self._sleep(self.TIME_DELAY_GRIPPER)
 
-            # 2. Nhấc lên cao -> XOAY bậc tự do 4 (vật đã được giữ) -> sang điểm thả cố định
-            self._move_or_raise(ax, ay, 290, self.TIME_MOVE_DOWN)
+            # 2. Nhấc lên Z safe -> XOAY DOF4 -> sang B -> hạ Z place -> nhả
+            self._move_or_raise(ax, ay, z_safe, self.TIME_MOVE_DOWN)
             self._rotate_dof4(rotate_callback, rotation_needed)
 
-            self._move_or_raise(bx, by, 290, self.TIME_MOVE_FAST)
-            self._move_or_raise(bx, by, z_pick, self.TIME_MOVE_DOWN)
-            self._move_or_raise(bx, by, z_action_place, self.TIME_MOVE_ACTION)
+            self._move_or_raise(bx, by, z_safe, self.TIME_MOVE_FAST)
+            self._move_or_raise(bx, by, z_place, self.TIME_MOVE_DOWN)
 
             print("[GRIPPER] Tắt hút/nhả vật")
             set_gripper("off")
-            time.sleep(self.TIME_DELAY_GRIPPER)
+            self._sleep(self.TIME_DELAY_GRIPPER)
 
-            # 3. Nhấc lên an toàn -> XOAY NGƯỢC LẠI để reset bậc tự do 4 -> về Home
-            self._move_or_raise(bx, by, 290, self.TIME_MOVE_DOWN)
+            # 3. Nhấc lên Z safe -> XOAY NGƯỢC LẠI -> về Home
+            self._move_or_raise(bx, by, z_safe, self.TIME_MOVE_DOWN)
             if rotation_needed is not None:
                 self._rotate_dof4(rotate_callback, -rotation_needed)
 
             self.move_home()
+            self._check_abort()
             print("=== HOÀN TẤT QUY TRÌNH GẮP THẢ (4DOF) ===\n")
             return True
+
+        except MotionAborted:
+            print("[DỪNG] Người dùng nhấn DỪNG -> nhấc lên, về HOME, tắt bơm, xoay về cũ.")
+            self._abort_retreat(set_gripper, rotate_callback)
+            return False
 
         except MotionError as e:
             print(f"[LỖI QUY TRÌNH] {e}")
             self._try_safe_retreat(bx, by)
             raise
 
-    def pick_and_place(self, point_a, point_b, z_pick=290, gripper_callback=None):
-        """Bản KHÔNG có bậc tự do 4 - giữ nguyên y hệt move_delta_4dof.py gốc,
-        dùng khi không cần xoay (ví dụ chế độ Cameracircle.py cũ)."""
+    def pick_and_place(self, point_a, point_b, z_pick=290, z_place=None,
+                       gripper_callback=None):
+        """Bản KHÔNG xoay bậc 4 - dùng khi không cần xoay."""
         return self.pick_and_place_dof4(
-            point_a, z_pick=z_pick, gripper_callback=gripper_callback,
+            point_a, z_pick=z_pick, z_place=z_place,
+            gripper_callback=gripper_callback,
             rotate_callback=None, object_angle_deg=None, place_point=point_b,
         )

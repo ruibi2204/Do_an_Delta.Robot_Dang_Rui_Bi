@@ -16,7 +16,7 @@ from vision.Camera_4dof import (
 )
 
 try:
-    from kinematics.move_delta_4dof import (
+    from kinematics.move_run4dof import (
         TIME_MOVE_FAST, TIME_MOVE_DOWN, TIME_MOVE_ACTION,
     )
 except Exception:
@@ -30,6 +30,23 @@ ROI_OBJECT_COLOR = (255, 0, 0)
 ROI_FRAME_COLOR = (0, 165, 255)
 PREDICT_COLOR = (255, 0, 255)
 
+# ROI khung KHÔNG cần bao trọn cả khối 8 lỗ - chỉ cần đủ để nhận diện 1 LỖ
+# duy nhất (khung được đặt cố định ở mép trái vùng quan sát, không quay
+# cùng mâm nên không cần vùng lớn để "đuổi theo" như vùng vật). Kích thước
+# ROI khung = roi_size (của vùng vật) NHÂN THÊM hệ số này, để có biên dung
+# sai rộng hơn một chút khi lỗ hơi lệch/rung, dễ chỉnh bằng cách đổi số ở
+# đây mà không đụng ROI_SIZE_RATIO (vốn đang chi phối cả 2 vùng qua roi_size).
+ROI_FRAME_SIZE_SCALE = 1.15
+
+# Bù lệch RIÊNG cho vùng KHUNG (ROI màu cam) - độc lập hoàn toàn với
+# ROI_SHIFT_LEFT_MM / ROI_SHIFT_DOWN_MM (vốn chỉ chi phối vùng VẬT).
+# roi_frame giờ NEO Ở MÉP PHẢI khung hình (thay vì mép trái như trước).
+# ROI_FRAME_MARGIN_RIGHT_MM: khoảng cách từ mép PHẢI khung hình vào trong
+# (mm) - dương = ROI nằm cách xa mép phải hơn (lùi vào trong), 0 = sát mép
+# phải. ROI_FRAME_SHIFT_DOWN_MM: dịch xuống dưới (mm), dương = xuống dưới.
+ROI_FRAME_MARGIN_RIGHT_MM = 20.0
+ROI_FRAME_SHIFT_DOWN_MM = 50.0
+
 # Bù lệch thủ công cho tọa độ Y của VẬT (mm). CHỈ áp dụng cho danh sách
 # `objects` (vật rời) - KHÔNG áp dụng cho `holes` (khung), khung phải giữ
 # nguyên tọa độ gốc do camera đo được. Được cộng vào o["y_mm"] ngay sau
@@ -37,6 +54,7 @@ PREDICT_COLOR = (255, 0, 255)
 # đi (nhãn hiển thị, dự đoán vị trí gắp predict_grasp_pose, tọa độ gửi
 # cho robot qua x_mm_grasp/y_mm_grasp) đều phản ánh đúng offset này.
 OBJECT_Y_OFFSET_MM = 3.0
+
 
 
 class _ThreadedCapture:
@@ -116,6 +134,88 @@ GRASP_DELAY_S = TIME_MOVE_FAST + TIME_MOVE_DOWN + TIME_MOVE_ACTION + VISION_PROC
 PREDICTION_LEAD_SCALE = 1.0
 
 
+# =====================================================================
+# NGUỒN CHÂN LÝ DÙNG CHUNG: THAM CHIẾU TỚI PLANNER THẬT
+# ---------------------------------------------------------------------
+# Theo đúng mẫu hình _current_table_rpm / set_table_rpm ở trên.
+# DynamicRun4DofWindow gọi set_planner(ctx.planner_run4dof) một lần khi mở
+# camera. Vì planner là object mutable, mọi thay đổi tốc độ sau đó
+# (update_speed_params() qua thanh trượt tốc độ) tự động phản ánh trong
+# solve_rendezvous() bên dưới - KHÔNG cần đồng bộ lại giá trị mỗi lần đổi
+# tốc độ, vì ta luôn đọc thuộc tính mới nhất trực tiếp từ chính instance.
+# =====================================================================
+_planner_lock = threading.Lock()
+_current_planner = None
+
+
+def set_planner(planner):
+    global _current_planner
+    with _planner_lock:
+        _current_planner = planner
+
+
+def get_planner():
+    with _planner_lock:
+        return _current_planner
+
+
+# =====================================================================
+# BIAS TỰ HỌC (EMA) - hấp thụ mọi sai số hệ thống không mô hình hóa được
+# (độ trễ UART, độ trễ cơ khí servo, overhead luồng Python/Qt...) mà
+# KHÔNG cần con người đo/canh chỉnh tay. Tách riêng bias cho pha PICK và
+# pha PLACE vì 2 pha có chuỗi thao tác khác nhau (PLACE có thêm xoay DOF4).
+# =====================================================================
+_bias_lock = threading.Lock()
+_bias_pick_s = 0.0
+_bias_place_s = 0.0
+BIAS_EMA_ALPHA = 0.2   # trọng số mẫu mới; nhỏ -> mượt/ổn định hơn, lớn -> bám nhanh hơn
+BIAS_CLAMP_S = 0.5     # chặn bias không vượt quá +-0.5s (an toàn, tránh runaway nếu có mẫu lỗi)
+
+
+def report_actual_delay(kind: str, predicted_delay_s: float, actual_delay_s: float):
+    """Gọi SAU MỖI chu trình thật (từ dynamic_run4dof_window.py), so sánh
+    delay đã dự đoán (solve_rendezvous trả về) với delay đo được thật
+    (time.perf_counter từ lúc capture frame tới lúc gripper kích hoạt).
+    kind: 'pick' hoặc 'place'. Bias được cập nhật liên tục bằng bộ lọc
+    EMA, tự động thích nghi qua thời gian - không cần canh tay lại."""
+    global _bias_pick_s, _bias_place_s
+    if predicted_delay_s is None or actual_delay_s is None:
+        return
+    residual = actual_delay_s - predicted_delay_s
+    with _bias_lock:
+        if kind == "pick":
+            _bias_pick_s = (1 - BIAS_EMA_ALPHA) * _bias_pick_s + BIAS_EMA_ALPHA * residual
+            _bias_pick_s = max(-BIAS_CLAMP_S, min(BIAS_CLAMP_S, _bias_pick_s))
+        else:
+            _bias_place_s = (1 - BIAS_EMA_ALPHA) * _bias_place_s + BIAS_EMA_ALPHA * residual
+            _bias_place_s = max(-BIAS_CLAMP_S, min(BIAS_CLAMP_S, _bias_place_s))
+
+
+def get_bias(kind: str) -> float:
+    with _bias_lock:
+        return _bias_pick_s if kind == "pick" else _bias_place_s
+
+
+def set_bias(pick_bias_s: float = 0.0, place_bias_s: float = 0.0):
+    """Nạp lại bias đã học từ lần chạy trước (đọc từ robot_config.json qua
+    ctx.cfg["run4dof_bias_pick"/"run4dof_bias_place"]). Gọi 1 lần khi mở
+    camera, NGAY SAU set_planner() và TRƯỚC khi bắt đầu vòng lặp gắp-thả,
+    để không phải học lại từ 0 mỗi lần mở app. Giá trị được kẹp trong
+    +-BIAS_CLAMP_S để nhất quán với report_actual_delay()."""
+    global _bias_pick_s, _bias_place_s
+    with _bias_lock:
+        _bias_pick_s = max(-BIAS_CLAMP_S, min(BIAS_CLAMP_S, float(pick_bias_s)))
+        _bias_place_s = max(-BIAS_CLAMP_S, min(BIAS_CLAMP_S, float(place_bias_s)))
+
+
+def get_bias_snapshot():
+    """Trả (bias_pick_s, bias_place_s) hiện tại - dùng để lưu định kỳ vào
+    robot_config.json (qua save_config(ctx.cfg)), để lần mở app sau đọc
+    lại bằng set_bias() thay vì học lại từ đầu."""
+    with _bias_lock:
+        return _bias_pick_s, _bias_place_s
+
+
 def predict_grasp_pose(x_mm, y_mm, angle_deg, delay_s=GRASP_DELAY_S,
                         table_cx=TABLE_CENTER_X_MM, table_cy=TABLE_CENTER_Y_MM,
                         omega_deg_s=None, direction=TABLE_ROTATION_DIR,
@@ -145,6 +245,79 @@ def predict_grasp_pose(x_mm, y_mm, angle_deg, delay_s=GRASP_DELAY_S,
     return x_pred, y_pred, angle_pred
 
 
+# =====================================================================
+# GIẢI BÀI TOÁN HẸN GẶP BẰNG LẶP ĐIỂM BẤT ĐỘNG (fixed-point iteration)
+# ---------------------------------------------------------------------
+# Bản chất: điểm đích dự đoán phụ thuộc delay, nhưng delay lại phụ thuộc
+# thời gian di chuyển tới điểm đích đó (xa hay gần Home) - một vòng phụ
+# thuộc tròn không thể giải đúng bằng công thức cộng dồn một lần. Cách
+# đúng là lặp:
+#
+#   delta_0     = vision_latency_s + bias
+#   delta_(n+1) = vision_latency_s + bias + travel_time(xoay(vi_tri_do, omega*delta_n))
+#
+# Lặp vài vòng (thường hội tụ rất nhanh vì travel_time biến thiên chậm
+# theo vị trí) sẽ ra điểm hẹn gặp đúng cho MỌI khoảng cách - không còn
+# phân biệt vật gần/xa như cách tính delay cố định trước đây.
+# damping < 1.0 để tránh dao động (overshoot) qua các vòng lặp.
+# =====================================================================
+def solve_rendezvous(x0, y0, angle0, vision_latency_s, kind,
+                      z_pick=290,
+                      table_cx=TABLE_CENTER_X_MM, table_cy=TABLE_CENTER_Y_MM,
+                      direction=TABLE_ROTATION_DIR, omega_deg_s=None,
+                      max_iter=6, damping=0.5, tol=1e-4):
+    """Trả về (x_pred, y_pred, angle_pred, delay_s_da_dung).
+
+    kind: 'pick' (cho objects, dùng travel_time_pick) hoặc 'place' (cho
+    holes, dùng travel_time_place). Nếu chưa có planner tham chiếu (camera
+    mở trước khi window kịp gọi set_planner, hoặc chạy dry-run độc lập)
+    -> rơi về GRASP_DELAY_S cố định như hành vi gốc, không crash."""
+    planner = get_planner()
+    if omega_deg_s is None:
+        omega_deg_s = get_table_rpm() * 360.0 / 60.0
+    bias_s = get_bias(kind)
+
+    if planner is None:
+        delay_s = vision_latency_s + bias_s
+        x_pred, y_pred, angle_pred = predict_grasp_pose(
+            x0, y0, angle0, delay_s=delay_s,
+            table_cx=table_cx, table_cy=table_cy,
+            omega_deg_s=omega_deg_s, direction=direction, lead_scale=1.0,
+        )
+        return x_pred, y_pred, angle_pred, delay_s
+
+    delta = vision_latency_s + bias_s
+    x_pred, y_pred, angle_pred = x0, y0, angle0
+
+    for _ in range(max_iter):
+        x_pred, y_pred, angle_pred = predict_grasp_pose(
+            x0, y0, angle0, delay_s=delta,
+            table_cx=table_cx, table_cy=table_cy,
+            omega_deg_s=omega_deg_s, direction=direction, lead_scale=1.0,
+        )
+        try:
+            if kind == "pick":
+                travel = planner.travel_time_pick((x_pred, y_pred), z_pick=z_pick)
+            else:
+                travel = planner.travel_time_place((x_pred, y_pred), z_pick=z_pick, rotation_deg=angle_pred)
+        except Exception:
+            # Nếu planner lỗi vì lý do bất kỳ, dừng lặp và dùng giá trị hiện có.
+            break
+
+        new_delta = vision_latency_s + bias_s + travel
+        if abs(new_delta - delta) < tol:
+            delta = new_delta
+            break
+        delta = delta + damping * (new_delta - delta)  # giảm chấn, tránh dao động
+
+    x_pred, y_pred, angle_pred = predict_grasp_pose(
+        x0, y0, angle0, delay_s=delta,
+        table_cx=table_cx, table_cy=table_cy,
+        omega_deg_s=omega_deg_s, direction=direction, lead_scale=1.0,
+    )
+    return x_pred, y_pred, angle_pred, delta
+
+
 def _mm_to_px(x_mm, y_mm, cx, cy, fx, fy, calib_key):
     scale = _CIRCLE_CALIB[calib_key]["scale"]
     dx_px = x_mm / scale
@@ -165,14 +338,41 @@ def _draw_predicted_marker(display, cur_px, pred_px, x_mm_grasp, y_mm_grasp, ang
                 cv2.FONT_HERSHEY_SIMPLEX, 0.42, PREDICT_COLOR, 1)
 
 
-def _compute_two_rois(frame_w, frame_h, shift_left_px=0, shift_down_px=0):
+def _compute_two_rois(frame_w, frame_h, shift_left_px=0, shift_down_px=0,
+                       frame_margin_right_px=0, frame_shift_down_px=0):
+    """Trả về (roi_object, roi_frame) - HAI vùng KHÁC NHAU cả về kích
+    thước lẫn vị trí.
+
+    roi_object: giữ NGUYÊN như cũ - hình vuông cạnh roi_size, CĂN GIỮA
+    theo chiều ngang, neo từ mép trên theo chiều dọc (dịch được bằng
+    shift_down_px, dịch trái/phải bằng shift_left_px).
+
+    roi_frame: TO HƠN roi_object một chút (nhân thêm ROI_FRAME_SIZE_SCALE)
+    vì chỉ cần bao 1 lỗ (không cần bao trọn cả khối 8 lỗ) nhưng có biên
+    dung sai rộng hơn khi lỗ hơi lệch/rung. NEO Ở MÉP PHẢI khung hình
+    (khác với roi_object neo giữa/trên) - frame_margin_right_px là
+    khoảng cách từ mép phải khung hình LÙI VÀO TRONG (0 = sát mép phải),
+    frame_shift_down_px dịch xuống dưới - độc lập hoàn toàn với
+    shift_left_px/shift_down_px của roi_object, vì vị trí khung là vật lý
+    cố định, không liên quan tới việc căn giữa theo tâm mâm xoay (chỉ áp
+    dụng cho vật rời)."""
     roi_size = int(min(frame_w, frame_h) * ROI_SIZE_RATIO)
-    roi_x = (frame_w - roi_size) // 2 - shift_left_px
-    roi_x = max(0, min(roi_x, frame_w - roi_size))
-    roi_y = 0 + shift_down_px
-    roi_y = max(0, min(roi_y, frame_h - roi_size))
-    roi = (roi_x, roi_y, roi_size, roi_size)
-    return roi, roi
+
+    obj_x = (frame_w - roi_size) // 2 - shift_left_px
+    obj_x = max(0, min(obj_x, frame_w - roi_size))
+    obj_y = 0 + shift_down_px
+    obj_y = max(0, min(obj_y, frame_h - roi_size))
+    roi_object = (obj_x, obj_y, roi_size, roi_size)
+
+    frame_roi_size = int(round(roi_size * ROI_FRAME_SIZE_SCALE))
+    frame_roi_size = max(1, min(frame_roi_size, min(frame_w, frame_h)))
+    frame_x = (frame_w - frame_roi_size) - frame_margin_right_px  # neo mép phải
+    frame_x = max(0, min(frame_x, frame_w - frame_roi_size))
+    frame_y = 0 + frame_shift_down_px
+    frame_y = max(0, min(frame_y, frame_h - frame_roi_size))
+    roi_frame = (frame_x, frame_y, frame_roi_size, frame_roi_size)
+
+    return roi_object, roi_frame
 
 
 def _mask_restricted_to_roi(mask_small, roi_full_px, det_scale):
@@ -207,6 +407,13 @@ def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=8
 
     try:
         while is_running():
+            # Mốc thời gian THẬT bắt đầu chu kỳ xử lý frame này - dùng để
+            # đo vision_latency_s thực đo (thay cho hằng số đoán mò
+            # VISION_PROCESSING_DELAY_S = 0.15 trước đây), và để window
+            # tính actual_delay_s = t_grasp_perf - t_capture khi báo cáo
+            # về report_actual_delay().
+            t_capture = time.perf_counter()
+
             ret, frame = cap.read()
             if not ret or frame is None:
                 time.sleep(0.01)
@@ -224,7 +431,12 @@ def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=8
             _roi_scale = _CIRCLE_CALIB["white"]["scale"]
             shift_left_px = int(round(ROI_SHIFT_LEFT_MM / _roi_scale)) if _roi_scale else 0
             shift_down_px = int(round(ROI_SHIFT_DOWN_MM / _roi_scale)) if _roi_scale else 0
-            roi_object, roi_frame = _compute_two_rois(w_img, h_img, shift_left_px, shift_down_px)
+            frame_margin_right_px = int(round(ROI_FRAME_MARGIN_RIGHT_MM / _roi_scale)) if _roi_scale else 0
+            frame_shift_down_px = int(round(ROI_FRAME_SHIFT_DOWN_MM / _roi_scale)) if _roi_scale else 0
+            roi_object, roi_frame = _compute_two_rois(
+                w_img, h_img, shift_left_px, shift_down_px,
+                frame_margin_right_px, frame_shift_down_px,
+            )
             _draw_roi_box(display, roi_object, ROI_OBJECT_COLOR, "Vung nhan dien VAT")
             _draw_roi_box(display, roi_frame, ROI_FRAME_COLOR, "Vung nhan dien KHUNG")
 
@@ -288,14 +500,36 @@ def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=8
                     (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 200, 0), 2,
                 )
 
+            # Độ trễ xử lý ảnh THẬT tính tới thời điểm này (đã detect xong
+            # cả object lẫn hole) - thay cho hằng số VISION_PROCESSING_DELAY_S
+            # đoán mò trước đây. Vẫn cộng thêm phần đuôi (vẽ marker/log) là
+            # không đáng kể so với các mốc thời gian robot di chuyển.
+            vision_latency_s = time.perf_counter() - t_capture
+
+            # ---- Hiển thị BIAS tự học hiện tại NGAY TRÊN khung hình, để
+            # người dùng theo dõi trực tiếp lúc chạy thực nghiệm mà không
+            # cần chỉ nhìn vào log chữ. Đọc trực tiếp từ get_bias() - luôn
+            # là giá trị mới nhất tại thời điểm vẽ frame này. ----
+            bias_pick_s = get_bias("pick")
+            bias_place_s = get_bias("place")
+            cv2.putText(
+                display,
+                f"Bias hoc duoc: PICK={bias_pick_s:+.3f}s   PLACE={bias_place_s:+.3f}s",
+                (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 255), 2,
+            )
+
             items = []
             for o in objects:
                 item = {**o, "diameter_mm": None, "slot_id": None}
-                x_pred, y_pred, angle_pred = predict_grasp_pose(
-                    o["x_mm"], o["y_mm"], o["angle_deg"])
+                x_pred, y_pred, angle_pred, delay_used = solve_rendezvous(
+                    o["x_mm"], o["y_mm"], o["angle_deg"], vision_latency_s, kind="pick")
                 item["x_mm_grasp"] = x_pred
                 item["y_mm_grasp"] = y_pred
                 item["angle_deg_grasp"] = angle_pred
+                # Mốc + delay dự đoán, để window đo actual_delay_s thật và
+                # gọi report_actual_delay() sau khi chu trình PICK hoàn tất.
+                item["_predicted_delay_s"] = delay_used
+                item["_t_capture_perf"] = t_capture
 
                 px_pred, py_pred = _mm_to_px(x_pred, y_pred, cx, cy, fx, fy, calib_key="white")
                 item["cx_px_grasp"] = px_pred
@@ -306,14 +540,18 @@ def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=8
                 )
                 items.append(item)
 
-            # ---- Khung (holes): giữ nguyên hoàn toàn, KHÔNG bù offset ----
+            # ---- Khung (holes): giữ nguyên tọa độ gốc, KHÔNG bù offset Y,
+            #      nhưng CÓ dự đoán riêng theo delay của pha THẢ (kind=
+            #      "place"), khác với delay của pha GẮP dùng cho objects. ----
             for h in holes:
                 item = {**h, "diameter_mm": None}
-                x_pred, y_pred, angle_pred = predict_grasp_pose(
-                    h["x_mm"], h["y_mm"], h["angle_deg"])
+                x_pred, y_pred, angle_pred, delay_used = solve_rendezvous(
+                    h["x_mm"], h["y_mm"], h["angle_deg"], vision_latency_s, kind="place")
                 item["x_mm_grasp"] = x_pred
                 item["y_mm_grasp"] = y_pred
                 item["angle_deg_grasp"] = angle_pred
+                item["_predicted_delay_s"] = delay_used
+                item["_t_capture_perf"] = t_capture
 
                 px_pred, py_pred = _mm_to_px(x_pred, y_pred, cx, cy, fx, fy, calib_key="black")
                 item["cx_px_grasp"] = px_pred

@@ -17,6 +17,42 @@ SPINBOX_MAX_W = 130
 SPEED_SLIDER_MIN = 1
 SPEED_SLIDER_MAX = 300
 
+# Nút hành động thường (Start/Run/Chọn file/...) - màu VÀNG NHẠT, đồng bộ
+# với windows/board_calib_window.py.
+GRAY_BTN_STYLE = """
+QPushButton#grayActionBtn {
+    background-color: #fff3b0;
+    color: #1a1a1a;
+    border: 2px solid #d9b800;
+    border-radius: 12px;
+    padding: 12px 18px;
+    font-weight: 700;
+    font-size: 14pt;
+    min-height: 40px;
+}
+QPushButton#grayActionBtn:hover { background-color: #ffe680; }
+QPushButton#grayActionBtn:pressed { background-color: #f2d24d; }
+QPushButton#grayActionBtn:disabled { background-color: #2a4a75; border-color: #2a4a75; color: #7f93ad; }
+"""
+
+# Nút DỪNG / HUỶ (Stop / Cancel) - màu XANH DƯƠNG, đồng bộ với
+# windows/board_calib_window.py.
+RED_BTN_STYLE = """
+QPushButton#redActionBtn {
+    background-color: #0078d4;
+    color: #ffffff;
+    border: 2px solid #005fa8;
+    border-radius: 12px;
+    padding: 12px 18px;
+    font-weight: 700;
+    font-size: 14pt;
+    min-height: 40px;
+}
+QPushButton#redActionBtn:hover { background-color: #005fa8; }
+QPushButton#redActionBtn:pressed { background-color: #00477e; }
+QPushButton#redActionBtn:disabled { background-color: #2a4a75; border-color: #2a4a75; color: #7f93ad; }
+"""
+
 
 class DrawWindow(BaseTabWindow):
     """
@@ -144,10 +180,14 @@ class DrawWindow(BaseTabWindow):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
         self.btn_start = QPushButton("▶  BẮT ĐẦU")
-        self.btn_start.setObjectName("dynStartBtn")
+        self.btn_start.setObjectName("grayActionBtn")
+        self.btn_start.setStyleSheet(GRAY_BTN_STYLE)
+        self.btn_start.setMinimumHeight(44)
         self.btn_start.clicked.connect(self.on_start)
         self.btn_stop = QPushButton("■  DỪNG")
-        self.btn_stop.setObjectName("dynStopBtn")
+        self.btn_stop.setObjectName("redActionBtn")
+        self.btn_stop.setStyleSheet(RED_BTN_STYLE)
+        self.btn_stop.setMinimumHeight(44)
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_stop.setEnabled(False)
         btn_row.addWidget(self.btn_start)

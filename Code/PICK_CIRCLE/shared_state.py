@@ -39,6 +39,11 @@ from kinematics.move_run4dof import DeltaMotionPlanner as Run4DofPlanner
 # với DeltaMotionPlanner, Dof4Planner hay Run4DofPlanner. Không tab nào
 # khác được dùng cái này.
 from kinematics.repeat_kinematics import RepeatKinematicsPlanner
+# Dof3Planner (ctx.planner_3dof): planner RIÊNG, CHỈ dùng bởi tab
+# "BÀI TOÁN TĨNH — CAMERA TRỰC TIẾP" (CsvWindow), từ kinematics/move_delta3dof.py.
+# Logic chuyển động giống move_delta_4dof.py nhưng KHÔNG có bậc tự do 4
+# (không xoay bàn xoay). Không tab nào khác được dùng cái này.
+from kinematics.move_delta_3dof import DeltaMotionPlanner as Dof3Planner
 from hardware.Uart_2 import PneumaticComm, DEFAULT_BAUD as PNEU_DEFAULT_BAUD
 from vision.Cameracircle import (
     CircleTracker,
@@ -84,12 +89,8 @@ DOF4_TARGET_ANGLE_DEG = 90.0
 TURNTABLE_MAX_RPM = 65.0
 DET_SCALE = 0.5
 
-# Hệ số kích thước vùng ROI (ô vuông giữa khung hình) dùng để giới hạn vùng
-# tìm vật thể (không áp dụng cho việc tìm khung/lỗ). PHẢI khớp với hệ số
-# đang dùng trong vision/Camera_4dof.py (run_live_display) để hành vi của
-# GUI chính và bản chạy độc lập (camera_4dof.py) nhất quán với nhau:
-#   roi_size = min(w, h) * ROI_SIZE_FACTOR
-ROI_SIZE_FACTOR = 2.0 / 3.0
+# ĐÃ BỎ: ROI_SIZE_FACTOR và _compute_object_roi (không còn giới hạn vùng
+# tìm vật thể - camera quét toàn khung hình).
 
 # Mỗi "bậc" (stop) giảm/tăng độ sáng camera tương ứng với ngần này đơn vị
 # trên thang đo CAP_PROP_BRIGHTNESS của OpenCV (thang này tùy driver camera,
@@ -112,14 +113,6 @@ def _fmt_size_col(item):
 def _fmt_angle_col(item):
     a = item.get("angle_deg")
     return f'{float(a):.1f}' if a is not None else "-"
-
-
-def _compute_object_roi(frame_shape):
-    """Tính ô vuông ROI (x, y, w, h) ở giữa khung hình, dùng để giới hạn
-    vùng tìm vật thể - khớp với logic trong vision/Camera_4dof.py."""
-    h, w = frame_shape[:2]
-    roi_size = int(min(w, h) * ROI_SIZE_FACTOR)
-    return (w // 2 - roi_size // 2, h // 2 - roi_size // 2, roi_size, roi_size)
 
 
 def launch_manual_camera_center(camera_index=0):
@@ -189,6 +182,15 @@ def load_config():
         "repeat_by": 10.0,
         "repeat_count": 10,
         "repeat_z_pick": 300.0,
+        # ==== MỚI: bias tự học (EMA) của cơ chế dự đoán hẹn gặp mâm xoay
+        # (xem vision/camera_run4dof.py: report_actual_delay/get_bias/
+        # set_bias/get_bias_snapshot). Lưu lại giữa các phiên chạy để
+        # DynamicRun4DofWindow không phải học lại từ 0 mỗi lần mở app -
+        # xem _restore_saved_bias()/_save_bias_to_config() trong
+        # dynamic_run4dof_window.py. Đơn vị: giây. 0.0 = chưa học gì
+        # (hành vi giống hệt trước khi có cơ chế bias). ====
+        "run4dof_bias_pick": 0.0,
+        "run4dof_bias_place": 0.0,
     }
     if os.path.isfile(CONFIG_FILE):
         try:
@@ -351,12 +353,6 @@ class CameraThread(QThread):
 
                 items_out = []
 
-                # ROI (ô vuông giữa khung hình) dùng để giới hạn vùng tìm
-                # vật thể ở các chế độ dof4/dynamic - khớp với
-                # vision/Camera_4dof.py (run_live_display) để hành vi nhất
-                # quán giữa GUI chính và bản chạy độc lập.
-                obj_roi = _compute_object_roi(undistorted.shape)
-
                 if self.detect_mode == COORD_MODE_DYNAMIC:
                     small = cv2.resize(undistorted, None, fx=DET_SCALE, fy=DET_SCALE, interpolation=cv2.INTER_AREA)
                     small_min_area = max(20, int(round(80 * DET_SCALE * DET_SCALE)))
@@ -368,15 +364,12 @@ class CameraThread(QThread):
                     objects = detect_objects(
                         undistorted, cx, cy, fx, fy,
                         mask=dyn_mask, upscale=dyn_upscale, refine_frame=undistorted,
-                        roi=obj_roi,
+                        roi=None,
                     )
 
                     if holes:
                         region = mold_bounding_region(holes, margin_mm=15.0)
                         objects = [o for o in objects if not is_inside_region(o["x_mm"], o["y_mm"], region)]
-
-                    cv2.rectangle(display, (obj_roi[0], obj_roi[1]),
-                                  (obj_roi[0] + obj_roi[2], obj_roi[1] + obj_roi[3]), (255, 0, 0), 2)
 
                     for o_item in objects:
                         px, py = int(round(o_item['cx_px'])), int(round(o_item['cy_px']))
@@ -416,11 +409,8 @@ class CameraThread(QThread):
                     stable = detect_objects(
                         undistorted, cx, cy, fx, fy,
                         mask=dof4_mask, upscale=dof4_upscale, refine_frame=undistorted,
-                        roi=obj_roi,
+                        roi=None,
                     )
-
-                    cv2.rectangle(display, (obj_roi[0], obj_roi[1]),
-                                  (obj_roi[0] + obj_roi[2], obj_roi[1] + obj_roi[3]), (255, 0, 0), 2)
 
                     for t in stable:
                         px, py = int(round(t['cx_px'])), int(round(t['cy_px']))
@@ -549,11 +539,13 @@ def cv2_to_qpixmap(frame_bgr):
 
 
 def apply_light_palette(app):
+    # Tên hàm giữ nguyên để chỗ gọi không phải sửa, nhưng giờ là theme TỐI:
+    # nền xanh dương đen, đậm hơn màu nút (#0078d4).
     palette = QPalette()
-    bg = QColor("#eaf2fb")
-    base = QColor("#ffffff")
-    text = QColor("#1a1a1a")
-    disabled_text = QColor("#888888")
+    bg = QColor("#0a1a2f")        # nền chính: xanh dương đen
+    base = QColor("#0f2540")      # nền ô nhập / bảng / log
+    text = QColor("#e8f1ff")
+    disabled_text = QColor("#7f93ad")
     highlight = QColor("#0078d4")
 
     palette.setColor(QPalette.Window, bg)
@@ -565,7 +557,7 @@ def apply_light_palette(app):
     palette.setColor(QPalette.Text, text)
     palette.setColor(QPalette.Button, bg)
     palette.setColor(QPalette.ButtonText, text)
-    palette.setColor(QPalette.BrightText, Qt.blue)
+    palette.setColor(QPalette.BrightText, Qt.white)
     palette.setColor(QPalette.Highlight, highlight)
     palette.setColor(QPalette.HighlightedText, Qt.white)
     palette.setColor(QPalette.Disabled, QPalette.Text, disabled_text)
@@ -581,6 +573,7 @@ def apply_light_palette(app):
 # tông với màu nhấn #0078d4 đã dùng cho tiêu đề/khung viền). Các nút trước
 # đây tô màu ĐỎ (cảnh báo/ngắt kết nối/tắt thiết bị...) nay chuyển sang MÀU
 # XÁM trung tính (không còn dùng đỏ trong toàn bộ giao diện).
+# NỀN GIAO DIỆN: xanh dương đen (#0a1a2f), đậm hơn màu nút (#0078d4).
 # =====================================================================
 BTN_BLUE = "#0078d4"
 BTN_BLUE_HOVER = "#005fa8"
@@ -600,21 +593,23 @@ APP_FONT_FAMILY = "'Times New Roman', Times, serif"
 
 
 STYLE_SHEET = """
-QWidget { background-color: #eaf2fb; color: #1a1a1a; font-family: 'Times New Roman', Times, serif; font-size: 14pt; }
-QMainWindow { background-color: #eaf2fb; }
-QDialog { background-color: #eaf2fb; color: #1a1a1a; }
-QMessageBox { background-color: #eaf2fb; color: #1a1a1a; }
-QGroupBox { border: 2px solid #c0c0c0; border-radius: 12px; margin-top: 14px; font-weight: 700; font-size: 13pt; padding-top: 10px; color: #1a1a1a; }
+QWidget { background-color: #0a1a2f; color: #e8f1ff; font-family: 'Times New Roman', Times, serif; font-size: 14pt; }
+QMainWindow { background-color: #0a1a2f; }
+QDialog { background-color: #0a1a2f; color: #e8f1ff; }
+QMessageBox { background-color: #0a1a2f; color: #e8f1ff; }
+QToolTip { background-color: #0f2540; color: #e8f1ff; border: 1px solid #2a4a75; }
+QGroupBox { border: 2px solid #2a4a75; border-radius: 12px; margin-top: 14px; font-weight: 700; font-size: 13pt; padding-top: 10px; color: #e8f1ff; }
 QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; }
 QPushButton { background-color: #e0e0e0; color: #1a1a1a; border-radius: 14px; border: 2px solid #b0b0b0; padding: 10px; font-weight: 700; font-size: 15pt; }
 QPushButton:hover { background-color: #d0d0d0; border-color: #757575; }
 QPushButton:pressed { background-color: #757575; color: #ffffff; }
 QPushButton:disabled { background-color: #d0d0d0; color: #888888; border-color: #b0b0b0; }
-QPushButton#jogBtn { background-color: #e8e8e8; color: #1a1a1a; font-size: 20pt; min-height: 90px; }
-QPushButton#jogBtn:hover { background-color: #d0d0d0; }
-QPushButton#homeBtn { background-color: #d0d0d0; border-color: #b0b0b0; font-size: 16pt; min-height: 70px; }
+QPushButton#jogBtn { background-color: #e8e8e8; color: #1a1a1a; font-size: 13pt; font-weight: 700; min-height: 56px; max-height: 72px; padding: 4px 6px; border-radius: 10px; }
+QPushButton#jogBtn:hover { background-color: #cde0ff; border-color: #4da6ff; }
+QPushButton#jogBtn:pressed { background-color: #4da6ff; color: #ffffff; }
+QPushButton#homeBtn { background-color: #d0d0d0; border-color: #b0b0b0; font-size: 11pt; min-height: 0px; max-height: 28px; padding: 2px 6px; }
 QPushButton#homeBtn:hover { background-color: #c0c0c0; }
-QPushButton#saveBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; font-size: 15pt; min-height: 60px; }
+QPushButton#saveBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; font-size: 11pt; min-height: 0px; max-height: 28px; padding: 2px 6px; }
 QPushButton#saveBtn:hover { background-color: #005fa8; }
 QPushButton#connectBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 38px; font-size: 11pt; padding: 6px; }
 QPushButton#connectBtn:hover { background-color: #005fa8; }
@@ -638,34 +633,34 @@ QPushButton#backBtn { background-color: #0078d4; color: #ffffff; min-height: 44p
 QPushButton#backBtn:hover { background-color: #005fa8; }
 QPushButton#menuBtn { min-height: 80px; font-size: 17pt; background-color: #0078d4; color: #ffffff; border-color: #005fa8; }
 QPushButton#menuBtn:hover { background-color: #005fa8; }
-QLabel#menuTitle1 { font-size: 22pt; font-weight: 900; color: #0078d4; }
-QLabel#menuTitle2 { font-size: 18pt; font-weight: 800; color: #1a1a1a; }
-QLabel#menuTitle3 { font-size: 14pt; font-weight: 700; color: #555555; }
-QLabel#menuTitle4 { font-size: 15pt; font-weight: 800; color: #c0392b; }
-QLabel#posDisplay { background-color: #ffffff; border: 2px solid #0078d4; border-radius: 10px; font-size: 26pt; font-weight: 800; color: #0a6b3a; padding: 14px; }
-QLabel#statusOk { color: #0a7a3a; font-weight: 800; font-size: 14pt; }
-QLabel#statusBad { color: #757575; font-weight: 800; font-size: 14pt; }
-QLabel#sectionTitle { font-size: 15pt; font-weight: 800; color: #1a1a1a; }
-QLabel#deviceStateOn { color: #0a7a3a; font-weight: 800; font-size: 11pt; }
-QLabel#deviceStateOff { color: #757575; font-weight: 800; font-size: 11pt; }
+QLabel#menuTitle1 { font-size: 22pt; font-weight: 900; color: #4da6ff; }
+QLabel#menuTitle2 { font-size: 18pt; font-weight: 800; color: #e8f1ff; }
+QLabel#menuTitle3 { font-size: 14pt; font-weight: 700; color: #9fb6d6; }
+QLabel#menuTitle4 { font-size: 15pt; font-weight: 800; color: #cfe3ff; }
+QLabel#posDisplay { background-color: #0f2540; border: 2px solid #0078d4; border-radius: 10px; font-size: 26pt; font-weight: 800; color: #4cd98a; padding: 14px; }
+QLabel#statusOk { color: #4cd98a; font-weight: 800; font-size: 14pt; }
+QLabel#statusBad { color: #9aa7b8; font-weight: 800; font-size: 14pt; }
+QLabel#sectionTitle { font-size: 15pt; font-weight: 800; color: #e8f1ff; }
+QLabel#deviceStateOn { color: #4cd98a; font-weight: 800; font-size: 11pt; }
+QLabel#deviceStateOff { color: #9aa7b8; font-weight: 800; font-size: 11pt; }
 QGroupBox#compactBox { margin-top: 10px; padding-top: 8px; font-size: 11pt; }
 QGroupBox#compactBox QSpinBox, QGroupBox#compactBox QDoubleSpinBox { padding: 4px 6px; font-size: 11pt; min-height: 26px; }
-QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit { background-color: #ffffff; border: 2px solid #c0c0c0; border-radius: 8px; padding: 8px; font-size: 13pt; color: #1a1a1a; }
-QComboBox QAbstractItemView { background-color: #ffffff; color: #1a1a1a; border: 1px solid #c0c0c0; selection-background-color: #0078d4; selection-color: #ffffff; outline: none; }
-QListView { background-color: #ffffff; color: #1a1a1a; }
+QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit { background-color: #0f2540; border: 2px solid #2a4a75; border-radius: 8px; padding: 8px; font-size: 13pt; color: #e8f1ff; }
+QComboBox QAbstractItemView { background-color: #0f2540; color: #e8f1ff; border: 1px solid #2a4a75; selection-background-color: #0078d4; selection-color: #ffffff; outline: none; }
+QListView { background-color: #0f2540; color: #e8f1ff; }
 QCheckBox, QRadioButton { spacing: 8px; }
-QCheckBox::indicator, QRadioButton::indicator { width: 18px; height: 18px; border: 2px solid #b0b0b0; background-color: #ffffff; }
+QCheckBox::indicator, QRadioButton::indicator { width: 18px; height: 18px; border: 2px solid #4a6a95; background-color: #0f2540; }
 QRadioButton::indicator { border-radius: 9px; }
-QCheckBox::indicator:checked, QRadioButton::indicator:checked { background-color: #0078d4; border-color: #0078d4; }
-QTextEdit { background-color: #ffffff; border: 2px solid #c0c0c0; border-radius: 8px; color: #1a1a1a; font-family: Consolas, monospace; font-size: 11pt; }
-QTableWidget { background-color: #ffffff; border: 2px solid #c0c0c0; border-radius: 8px; gridline-color: #d0d0d0; font-size: 11pt; }
-QHeaderView::section { background-color: #e0e0e0; color: #1a1a1a; padding: 6px; border: none; font-weight: 700; }
-QScrollBar:vertical { background: #e0e0e0; width: 12px; margin: 0; }
-QScrollBar::handle:vertical { background: #b0b0b0; border-radius: 6px; min-height: 24px; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked { background-color: #0078d4; border-color: #4da6ff; }
+QTextEdit { background-color: #0f2540; border: 2px solid #2a4a75; border-radius: 8px; color: #e8f1ff; font-family: Consolas, monospace; font-size: 11pt; }
+QTableWidget { background-color: #0f2540; border: 2px solid #2a4a75; border-radius: 8px; gridline-color: #1f3a5f; color: #e8f1ff; font-size: 11pt; }
+QHeaderView::section { background-color: #163358; color: #e8f1ff; padding: 6px; border: none; font-weight: 700; }
+QScrollBar:vertical { background: #0f2540; width: 12px; margin: 0; }
+QScrollBar::handle:vertical { background: #2a4a75; border-radius: 6px; min-height: 24px; }
 QScrollBar::handle:vertical:hover { background: #0078d4; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { background: #e0e0e0; height: 12px; margin: 0; }
-QScrollBar::handle:horizontal { background: #b0b0b0; border-radius: 6px; min-width: 24px; }
+QScrollBar:horizontal { background: #0f2540; height: 12px; margin: 0; }
+QScrollBar::handle:horizontal { background: #2a4a75; border-radius: 6px; min-width: 24px; }
 QScrollBar::handle:horizontal:hover { background: #0078d4; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
@@ -712,6 +707,14 @@ class AppContext:
         self.planner_repeat = RepeatKinematicsPlanner(uart_comm=self.robot_uart)
         self.planner_repeat.HOME = tuple(self.cfg["home_position"])
         self.planner_repeat.Z_SAFE = self.cfg["z_safe"]
+
+        # planner_3dof: planner RIÊNG, CHỈ dùng bởi tab "BÀI TOÁN TĨNH —
+        # CAMERA TRỰC TIẾP" (CsvWindow), từ kinematics/move_delta3dof.py.
+        # Logic chuyển động giống move_delta_4dof.py nhưng KHÔNG có bậc tự
+        # do 4. Không tab nào khác được dùng cái này.
+        self.planner_3dof = Dof3Planner(uart_comm=self.robot_uart)
+        self.planner_3dof.HOME = tuple(self.cfg["home_position"])
+        self.planner_3dof.Z_SAFE = self.cfg["z_safe"]
 
         self.current_pos = list(self.cfg["home_position"])
         self.home_pos = list(self.cfg["home_position"])

@@ -351,6 +351,11 @@ class ConnectionWindow(BaseTabWindow):
         self.combo_pneu_port.addItems(ports)
         self.combo_pneu_port.setCurrentText(self.ctx.cfg["pneumatic_port"])
 
+        if ports:
+            self._append_conn_log(f"🔄 Cổng COM khả dụng: {', '.join(ports)}")
+        else:
+            self._append_conn_log("🔄 Không tìm thấy cổng COM nào.")
+
     def on_connect_robot(self):
         self.ctx.robot_uart.port = self.combo_robot_port.currentText()
         self.ctx.robot_uart.baud = int(self.combo_robot_baud.currentText())

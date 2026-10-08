@@ -9,26 +9,26 @@
 // USART2 (TX/RX), có thể bị cấu hình lại bất cứ lúc nào -> bàn xoay
 // chạy sai/giật. PB0/PB1 là 2 chân GPIO thường, không thuộc ngoại vi
 // UART/I2C/SPI mặc định nào trên STM32F103.
-#define TURN_PUL_PIN PA6  // PUL+
-#define TURN_DIR_PIN PA7   // DIR+
+#define TURN_PUL_PIN PA4  // PUL+
+#define TURN_DIR_PIN PA5   // DIR+
 
 // Step motor xoay theo độ (điều khiển vị trí tương đối)
-#define STEP_PIN PA4
-#define DIR_PIN  PA5
+#define STEP_PIN PA2
+#define DIR_PIN  PA3
 
 // ===================== CẤU HÌNH STEP: TRỤC "GÓC" =====================
 #define STEPS_PER_REV 6400     // 1/32 vi bước: 200*32
-#define STEP_MAX_SPEED 5000.0f
-#define STEP_ACCEL     2000.0f
+#define STEP_MAX_SPEED 15000.0f
+#define STEP_ACCEL     10000.0f
 
 // ===================== CẤU HÌNH STEP: BÀN XOAY =====================
-#define TURN_STEPS_PER_REV -800.0f   // 1/4 vi bước: 200*4
+#define TURN_STEPS_PER_REV -6400.0f   // 1/32 vi bước: 200*32 (dấu trừ giữ đúng chiều quay)
 #define TURN_MAX_RPM 50.0f
-#define TURN_MAX_SPEED (TURN_MAX_RPM * TURN_STEPS_PER_REV / 60.0f)
+#define TURN_MAX_SPEED (TURN_MAX_RPM * 6400.0f / 60.0f)
 
-// Chu kỳ ngắt sinh xung cho BÀN XOAY: 200us (5kHz) - dư biên nhiều so
-// với tốc độ bước tối đa cần (50rpm*800/60 ~ 667 bước/s).
-#define TURN_ISR_PERIOD_US 200
+// Chu kỳ ngắt sinh xung cho BÀN XOAY: 50us (20kHz) - đủ nhanh và mượt
+// cho vi bước 1/32 (ở 50rpm cần ~5333 xung/s, chu kỳ ngắt 50us = 20.000 lần/s).
+#define TURN_ISR_PERIOD_US 50
 
 // Chu kỳ ngắt sinh xung cho TRỤC GÓC: 50us (20kHz) - đủ nhanh để
 // AccelStepper.run() theo kịp STEP_MAX_SPEED=10000 bước/s có gia tốc,

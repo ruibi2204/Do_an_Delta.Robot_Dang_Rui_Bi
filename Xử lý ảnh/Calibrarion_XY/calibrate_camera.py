@@ -4,6 +4,8 @@ import os
 import sys
 import cv2
 import numpy as np
+
+
 def find_corners_auto(gray, board_w, board_h):
     """Thu ca (board_w, board_h) va (board_w-1, board_h-1) de tu do phat hien
     dung so goc trong, phong truong hop nguoi dung nhap so o vuong thay vi
@@ -27,9 +29,14 @@ def main():
     parser.add_argument("--images_dir", type=str, default="images", help="Thu muc chua anh ban co (mac dinh: 'images')")
     parser.add_argument("--board_w", type=int, default=9, help="So goc trong / o vuong chieu ngang (mac dinh 9)")
     parser.add_argument("--board_h", type=int, default=7, help="So goc trong / o vuong chieu doc (mac dinh 7)")
-    parser.add_argument("--square_size", type=float, default=9.96, help="Kich thuoc 1 o vuong tinh bang mm (mac dinh 10mm)")
+    parser.add_argument("--square_size", type=float, default=9.96, help="Kich thuoc 1 o vuong tinh bang mm (mac dinh 9.96mm)")
     parser.add_argument("--output", type=str, default="calibration_result", help="Ten file output (khong can duoi)")
     parser.add_argument("--show", action="store_true", help="Hien thi anh phat hien goc de kiem tra truc quan")
+    parser.add_argument("--ref_image", type=str, default=None,
+                        help="Anh ban co dat dung tren mat mam (anh chuan). "
+                             "Neu co, se tinh them R, T cua anh nay bang solvePnP")
+    parser.add_argument("--fix_k3", action="store_true",
+                        help="Co dinh k3 = 0 khi calib (dung khi he so meo k2, k3 qua lon / nghi bi overfit)")
     args = parser.parse_args()
 
     print(f"Dang tim anh trong thu muc: {os.path.abspath(args.images_dir)}")
@@ -52,7 +59,7 @@ def main():
 
     # Dem so lan phat hien theo tung kich thuoc de tu chon size pho bien nhat
     size_votes = {}
-    detections = []  # list of (path, gray_shape, corners, size)
+    detections = []  # list of (path, gray_shape, corners, size, img)
 
     for path in image_paths:
         img = cv2.imread(path)
@@ -87,6 +94,7 @@ def main():
 
     objpoints = []  # diem 3D trong khong gian thuc
     imgpoints = []  # diem 2D tuong ung tren anh
+    used_paths = []  # duong dan cac anh THUC SU dung de calib (khop thu tu rvecs/tvecs)
     image_size = None
 
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -102,6 +110,7 @@ def main():
         )
         objpoints.append(objp)
         imgpoints.append(corners_refined)
+        used_paths.append(path)
         used_count += 1
 
         if args.show:
@@ -119,8 +128,9 @@ def main():
         print("Canh bao: so anh hop le qua it (<5), ket qua calib co the khong chinh xac.")
 
     # ---- Calib camera ----
+    calib_flags = cv2.CALIB_FIX_K3 if args.fix_k3 else 0
     ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
-        objpoints, imgpoints, image_size, None, None
+        objpoints, imgpoints, image_size, None, None, flags=calib_flags
     )
 
     # ---- Tinh reprojection error ----
@@ -133,7 +143,48 @@ def main():
         total_error += error
     mean_error = total_error / len(objpoints)
 
-    print("===== KET QUA CALIB =====")
+    # ---- R, T cho TUNG anh calib (lay tu rvecs, tvecs) ----
+    R_list, T_list = [], []
+    print("===== MA TRAN NGOAI (R, T) THEO TUNG ANH =====")
+    for path, rvec, tvec in zip(used_paths, rvecs, tvecs):
+        R, _ = cv2.Rodrigues(rvec)          # R: 3x3
+        T = tvec.reshape(3, 1)              # T: 3x1 (mm)
+        R_list.append(R)
+        T_list.append(T)
+        print(f"--- {os.path.basename(path)} ---")
+        print("R =\n", np.round(R, 5))
+        print("T (mm) =", np.round(T.ravel(), 4))
+
+    # ---- R, T cua ANH CHUAN (ban co nam tren mat mam) ----
+    R_ref = T_ref = None
+    if args.ref_image:
+        ref_img = cv2.imread(args.ref_image)
+        if ref_img is None:
+            print(f"\nLOI: khong doc duoc anh chuan '{args.ref_image}'")
+        else:
+            ref_gray = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY)
+            ok, ref_corners, ref_size = find_corners_auto(
+                ref_gray, args.board_w, args.board_h
+            )
+            if not ok or ref_size != best_size:
+                print("\nLOI: khong tim thay ban co (dung kich thuoc) trong anh chuan.")
+            else:
+                ref_corners = cv2.cornerSubPix(
+                    ref_gray, ref_corners, (11, 11), (-1, -1), criteria
+                )
+                okp, rvec_ref, tvec_ref = cv2.solvePnP(
+                    objp, ref_corners, camera_matrix, dist_coeffs
+                )
+                if okp:
+                    R_ref, _ = cv2.Rodrigues(rvec_ref)
+                    T_ref = tvec_ref.reshape(3, 1)
+                    print("\n===== R, T CUA ANH CHUAN (MAT MAM) =====")
+                    print("R =\n", np.round(R_ref, 5))
+                    print("T (mm) =", np.round(T_ref.ravel(), 4))
+                else:
+                    print("\nLOI: solvePnP that bai tren anh chuan.")
+
+    print("\n===== KET QUA CALIB =====")
     print(f"RMS reprojection error (OpenCV): {ret:.4f}")
     print(f"Mean reprojection error (tinh tay): {mean_error:.4f} pixel")
     print("\nCamera matrix (ma tran noi tai):")
@@ -154,8 +205,7 @@ def main():
 
     # ---- Luu ket qua ----
     npz_path = f"{args.output}.npz"
-    np.savez(
-        npz_path,
+    save_dict = dict(
         camera_matrix=camera_matrix,
         dist_coeffs=dist_coeffs,
         image_size=image_size,
@@ -163,7 +213,13 @@ def main():
         board_w=board_w,
         board_h=board_h,
         square_size=args.square_size,
+        R_all=np.array(R_list),   # (N, 3, 3)
+        T_all=np.array(T_list),   # (N, 3, 1)
     )
+    if R_ref is not None:
+        save_dict["R_ref"] = R_ref
+        save_dict["T_ref"] = T_ref
+    np.savez(npz_path, **save_dict)
     print(f"\nDa luu ket qua (numpy) vao: {npz_path}")
 
     yaml_path = f"{args.output}.yaml"
@@ -173,6 +229,9 @@ def main():
     fs.write("image_width", image_size[0])
     fs.write("image_height", image_size[1])
     fs.write("mean_reprojection_error", mean_error)
+    if R_ref is not None:
+        fs.write("R_ref", R_ref)
+        fs.write("T_ref", T_ref)
     fs.release()
     print(f"Da luu ket qua (OpenCV YAML) vao: {yaml_path}")
 

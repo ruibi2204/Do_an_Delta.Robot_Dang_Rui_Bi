@@ -12,13 +12,13 @@ TIME_MOVE_ACTION = 0.3
 # ==== Tốc độ RIÊNG cho pha GẮP (pick_dof4): điểm A -> hạ Z -> tiến sâu gắp.
 # Mặc định lấy bằng giá trị chung ở trên để không phá vỡ hành vi cũ, nhưng
 # giờ có thể chỉnh riêng qua speed_params/GUI mà không ảnh hưởng pha thả. ====
-TIME_MOVE_FAST_PICK = 0.3
-TIME_MOVE_DOWN_PICK = 0.55
-TIME_MOVE_ACTION_PICK = 0.25
+TIME_MOVE_FAST_PICK = 0.33
+TIME_MOVE_DOWN_PICK = 0.5
+TIME_MOVE_ACTION_PICK = 0.3
 
 # ==== Tốc độ RIÊNG cho pha THẢ (place_dof4): điểm B -> hạ Z -> tiến sâu thả. ====
-TIME_MOVE_FAST_PLACE = 0.3
-TIME_MOVE_DOWN_PLACE = 0.3
+TIME_MOVE_FAST_PLACE = 0.33
+TIME_MOVE_DOWN_PLACE = 0.5
 TIME_MOVE_ACTION_PLACE = 0.3
 
 TIME_DELAY_GRIPPER = 0.2
@@ -26,7 +26,7 @@ TIME_DELAY_DOF4 = 0.2   # Thời gian chờ bàn xoay/step quay xong
 
 CONTROL_HZ = 100.0
 
-# ==== (MỚI - làm thẳng quỹ đạo) ====
+# ==== (Làm thẳng quỹ đạo) ====
 # Khoảng cách Cartesian tối đa (mm) cho phép giữa 2 điểm gửi liên tiếp.
 # TRƯỚC ĐÂY: số bước nội suy (n_steps) chỉ phụ thuộc THỜI GIAN di chuyển
 # (wait_s * CONTROL_HZ), không phụ thuộc khoảng cách. Với đoạn dài nhưng
@@ -43,9 +43,6 @@ MAX_STEP_MM = 3.0
 
 # Danh sách tên các tham số tốc độ mà GUI (khung "THAM SỐ TỐC ĐỘ") có thể
 # ghi đè. Dùng chung một danh sách để tránh gõ nhầm tên khóa ở nhiều nơi.
-# Đã thêm 6 khóa _PICK / _PLACE để GUI có thể chỉnh riêng từng pha; 3 khóa
-# gốc (không hậu tố) vẫn giữ để chỉnh tốc độ move_home()/an toàn. Đã thêm
-# MAX_STEP_MM để GUI/skill có thể tinh chỉnh độ mịn quỹ đạo nếu cần.
 SPEED_PARAM_KEYS = (
     "TIME_MOVE_FAST",
     "TIME_MOVE_DOWN",
@@ -222,6 +219,58 @@ class DeltaMotionPlanner:
 
         self.current_pos = target
 
+    # =====================================================================
+    # ƯỚC LƯỢNG THỜI GIAN DI CHUYỂN THẬT (dùng cho bài toán dự đoán mâm xoay)
+    # -----------------------------------------------------------------
+    # _estimate_segment_time dùng ĐÚNG công thức n_steps = max(theo thời
+    # gian, theo khoảng cách) mà _move_or_raise dùng để THI HÀNH thật, nên
+    # kết quả trả về không bao giờ lệch với thời gian robot thực sự di
+    # chuyển - dù vật ở gần hay xa Home.
+    #
+    # travel_time_pick / travel_time_place trả về thời gian di chuyển THỰC
+    # (không gồm độ trễ xử lý ảnh, không gồm bias hệ thống) từ start_pos
+    # tới đúng thời điểm "chạm vật" / "chạm khung". Phần cộng thêm vision
+    # latency + bias được xử lý ở tầng vision (vision/camera_run4dof.py),
+    # để planner chỉ chịu trách nhiệm đúng một việc: mô tả chính xác động
+    # học di chuyển của chính nó.
+    # =====================================================================
+    def _estimate_segment_time(self, p1, p2, wait_s):
+        distance = float(np.linalg.norm(np.array(p2, dtype=float) - np.array(p1, dtype=float)))
+        if distance < 1e-6:
+            return wait_s
+        n_steps_time = max(int(wait_s * self.CONTROL_HZ), 1)
+        n_steps_dist = max(int(math.ceil(distance / self.MAX_STEP_MM)), 1)
+        n_steps = max(n_steps_time, n_steps_dist)
+        return n_steps / self.CONTROL_HZ
+
+    def travel_time_pick(self, target_xy, z_pick=290, start_pos=None):
+        """Thời gian di chuyển THẬT (giây) từ start_pos (mặc định HOME) tới
+        đúng thời điểm tay gắp chạm vật tại target_xy, đi qua đúng 3 chặng
+        mà pick_dof4() thực hiện: điểm trên cao -> hạ Z_pick -> tiến sâu."""
+        ax, ay = target_xy
+        z_action_pick = z_pick + 12
+        p0 = tuple(start_pos) if start_pos is not None else self.HOME
+
+        t1 = self._estimate_segment_time(p0, (ax, ay, 290), self.TIME_MOVE_FAST_PICK)
+        t2 = self._estimate_segment_time((ax, ay, 290), (ax, ay, z_pick), self.TIME_MOVE_DOWN_PICK)
+        t3 = self._estimate_segment_time((ax, ay, z_pick), (ax, ay, z_action_pick), self.TIME_MOVE_ACTION_PICK)
+        return t1 + t2 + t3
+
+    def travel_time_place(self, target_xy, z_pick=290, start_pos=None, rotation_deg=0.0):
+        """Thời gian di chuyển THẬT (giây) từ start_pos (mặc định HOME,
+        robot đang giữ vật) tới đúng thời điểm vật chạm khung tại
+        target_xy. rotation_deg khác 0 -> cộng thêm TIME_DELAY_DOF4 vì
+        place_dof4() luôn xoay DOF4 trước khi di chuyển sang điểm thả."""
+        bx, by = target_xy
+        z_action_place = z_pick + 5
+        p0 = tuple(start_pos) if start_pos is not None else self.HOME
+
+        t_rotate = self.TIME_DELAY_DOF4 if abs(rotation_deg) >= 0.01 else 0.0
+        t1 = self._estimate_segment_time(p0, (bx, by, 290), self.TIME_MOVE_FAST_PLACE)
+        t2 = self._estimate_segment_time((bx, by, 290), (bx, by, z_pick), self.TIME_MOVE_DOWN_PLACE)
+        t3 = self._estimate_segment_time((bx, by, z_pick), (bx, by, z_action_place), self.TIME_MOVE_ACTION_PLACE)
+        return t_rotate + t1 + t2 + t3
+
     def move_home(self):
         print("--> Đang về Home...")
         x, y, z = self.HOME
@@ -276,7 +325,15 @@ class DeltaMotionPlanner:
 
         return set_gripper
 
-    def pick_dof4(self, point_a, z_pick=290, gripper_callback=None):
+    def pick_dof4(self, point_a, z_pick=290, gripper_callback=None, on_grasp_moment=None):
+        """
+        on_grasp_moment: callback tùy chọn, được gọi với đúng 1 tham số là
+            time.perf_counter() NGAY SAU KHI gripper thực sự được kích hoạt
+            (bật hút). Dùng để đo THỜI GIAN THỰC từ lúc camera detect vật
+            (mốc t_capture ở vision/camera_run4dof.py) tới đúng thời điểm
+            "chạm vật" - phục vụ cơ chế bias tự học (report_actual_delay).
+            Không truyền gì thì hành vi giữ nguyên như cũ.
+        """
         ax, ay = point_a
         z_action_pick = z_pick + 12
         set_gripper = self._make_set_gripper(gripper_callback)
@@ -291,6 +348,11 @@ class DeltaMotionPlanner:
 
             print("[GRIPPER] Bật hút/kẹp vật")
             set_gripper("on")
+            if on_grasp_moment is not None:
+                try:
+                    on_grasp_moment(time.perf_counter())
+                except Exception as e:
+                    print(f"[CẢNH BÁO] on_grasp_moment callback lỗi: {e}")
             time.sleep(self.TIME_DELAY_GRIPPER)
 
             # 2. Nhấc lên an toàn -> về Home, VẪN GIỮ vật (không xoay,
@@ -306,9 +368,17 @@ class DeltaMotionPlanner:
             raise
 
     def place_dof4(self, place_point, z_pick=290, gripper_callback=None,
-                    rotate_callback=None, object_angle_deg=None, target_angle_deg=90.0):
+                    rotate_callback=None, object_angle_deg=None, target_angle_deg=90.0,
+                    on_grasp_moment=None):
+        """
+        on_grasp_moment: callback tùy chọn, được gọi với time.perf_counter()
+            NGAY SAU KHI gripper thực sự nhả vật (tắt hút). Dùng để đo thời
+            gian thực tới đúng thời điểm "chạm khung" - phục vụ
+            report_actual_delay(kind="place", ...). Không truyền gì thì
+            hành vi giữ nguyên như cũ.
+        """
         bx, by = place_point
-        z_action_place = z_pick + 10
+        z_action_place = z_pick + 14
         set_gripper = self._make_set_gripper(gripper_callback)
 
         rotation_needed = None
@@ -332,6 +402,11 @@ class DeltaMotionPlanner:
 
             print("[GRIPPER] Tắt hút/nhả vật")
             set_gripper("off")
+            if on_grasp_moment is not None:
+                try:
+                    on_grasp_moment(time.perf_counter())
+                except Exception as e:
+                    print(f"[CẢNH BÁO] on_grasp_moment callback lỗi: {e}")
             time.sleep(self.TIME_DELAY_GRIPPER)
 
             # 3. Nhấc lên an toàn -> XOAY NGƯỢC LẠI để reset bậc tự do 4 -> về Home
