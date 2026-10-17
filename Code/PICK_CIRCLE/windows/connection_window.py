@@ -137,11 +137,11 @@ class ConnectionWindow(BaseTabWindow):
         ul = QHBoxLayout()
         ul.setSpacing(8)
         _UTIL_BTN_STYLE = (
-            "QPushButton { background-color: #0078d4; color: #ffffff;"
-            " border: 2px solid #005fa8; border-radius: 10px;"
+            "QPushButton { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3a9bf0, stop:1 #1670d4);"
+            " color: #ffffff; border: 1px solid #1670d4; border-radius: 10px;"
             " font-size: 11pt; font-weight: 700; padding: 6px 12px; }"
-            "QPushButton:hover { background-color: #005fa8; }"
-            "QPushButton:pressed { background-color: #00477e; }"
+            "QPushButton:hover { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #55aef6, stop:1 #2285e6); border-color: #1262b4; }"
+            "QPushButton:pressed { background-color: #1262b4; }"
         )
         self.btn_refresh_ports = QPushButton("LÀM MỚI CỔNG COM")
         self.btn_refresh_ports.setStyleSheet(_UTIL_BTN_STYLE)
@@ -270,7 +270,7 @@ class ConnectionWindow(BaseTabWindow):
         step_layout.addLayout(quick_row)
 
         self.lbl_step_state = QLabel("Chưa gửi lệnh quay nào.")
-        self.lbl_step_state.setStyleSheet("color:#555555; font-size:9pt;")
+        self.lbl_step_state.setStyleSheet("color:#4b6a93; font-size:9pt;")
         step_layout.addWidget(self.lbl_step_state)
 
         step_box.setLayout(step_layout)

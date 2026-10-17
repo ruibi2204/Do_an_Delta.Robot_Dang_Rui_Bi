@@ -6,7 +6,7 @@ clear; clc; close all;
 %% 1. Thông số hình học (mm)
 L1 = 130;   % Cánh tay chủ động
 L2 = 298;   % Cánh tay bị động
-R = 100;    % Bán kính đế cố định
+R = 122;    % Bán kính đế cố định
 r = 40;     % Bán kính đế di động
 
 wb = R - r; % Khoảng cách hiệu dụng

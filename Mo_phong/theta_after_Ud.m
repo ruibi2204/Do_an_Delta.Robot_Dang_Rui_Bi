@@ -6,11 +6,11 @@ clear; clc; close all;
 %% 1. Thông số hình học và bộ truyền
 L1 = 130;   % Cánh tay chủ động (mm)
 L2 = 298;   % Cánh tay bị động (mm)
-R = 100;    % Bán kính đế cố định (mm)
+R = 120;    % Bán kính đế cố định (mm)
 r = 40;     % Bán kính đế di động (mm)
 wb = R - r; % Khoảng cách hiệu dụng
 
-u = 3.2;    % Tỉ số truyền của bộ truyền đai 
+u = 3.0;    % Tỉ số truyền của bộ truyền đai 
 
 %% 2. Tạo quỹ đạo chuyển động cho Bàn kẹp (End-effector)
 % Cho robot chạy một đường tròn nằm ngang ở độ sâu Z = -250mm

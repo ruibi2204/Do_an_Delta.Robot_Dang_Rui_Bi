@@ -13,6 +13,7 @@ from vision.Camera_4dof import (
     is_inside_region,
     _build_red_mask,
     _CIRCLE_CALIB,
+    brighten_for_display,  # tăng nhẹ độ sáng ảnh hiển thị (chỉnh DISPLAY_GAMMA trong Camera_4dof.py)
 )
 
 try:
@@ -395,7 +396,10 @@ def _draw_roi_box(display, roi, color, label):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
 
-def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=80.0):
+def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=80.0, show_extra=False):
+    """show_extra=True: mở thêm 2 cửa sổ OpenCV 'RGB' và 'Binary (red mask)'.
+    Mặc định False để GUI (Qt) gọi như cũ không bị mở cửa sổ phụ; chỉ bật khi
+    chạy trực tiếp file này (xem _main() ở cuối file)."""
     data = np.load(calib_path)
     camera_matrix, dist_coeffs = data["camera_matrix"], data["dist_coeffs"]
 
@@ -423,7 +427,8 @@ def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=8
             fx, fy = new_cm[0, 0], new_cm[1, 1]
             cx, cy = new_cm[0, 2], new_cm[1, 2]
 
-            display = undistorted.copy()
+            # Chỉ làm sáng ảnh HIỂN THỊ; nhận diện bên dưới vẫn dùng ảnh gốc (undistorted)
+            display = brighten_for_display(undistorted)
             origin_px = (int(round(cx)), int(round(cy)))
             cv2.drawMarker(display, origin_px, (0, 255, 255), cv2.MARKER_CROSS, 20, 2)
 
@@ -447,6 +452,19 @@ def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=8
 
             mask_object = _mask_restricted_to_roi(red_mask, roi_object, DET_SCALE)
             mask_frame = _mask_restricted_to_roi(red_mask, roi_frame, DET_SCALE)
+
+            # ---- Cửa sổ phụ: ảnh RGB + ảnh nhị phân (chỉ khi show_extra=True) ----
+            if show_extra:
+                # RGB: ảnh màu gốc đã undistort, không vẽ chú thích, không tăng sáng
+                cv2.imshow("RGB", undistorted)
+
+                # Nhị phân NÉT: tính lại mask ở độ phân giải gốc (chỉ để hiển thị),
+                # không ảnh hưởng mask nhận diện (red_mask ở DET_SCALE) phía trên.
+                binary_full = _build_red_mask(undistorted, min_component_area=80)
+                binary_bgr = cv2.cvtColor(binary_full, cv2.COLOR_GRAY2BGR)
+                _draw_roi_box(binary_bgr, roi_object, ROI_OBJECT_COLOR, "ROI VAT")
+                _draw_roi_box(binary_bgr, roi_frame, ROI_FRAME_COLOR, "ROI KHUNG")
+                cv2.imshow("Binary (red mask)", binary_bgr)
 
             # ---- Khung 8 lỗ (frame holes): CHỈ dò trong roi_frame. KHÔNG
             #      áp dụng OBJECT_Y_OFFSET_MM ở đây - khung giữ nguyên
@@ -573,3 +591,44 @@ def run_camera_run4dof_stream(camera_index, calib_path, is_running, brightness=8
             yield display, items, fps
     finally:
         cap.release()
+
+
+def _main():
+    """Chạy độc lập để kiểm tra: hiện cửa sổ chính + RGB + nhị phân. 'q' để thoát.
+    Chạy từ thư mục gốc dự án (để import vision.* hoạt động), ví dụ:
+        python -m vision.Camera_run4dof_stream --calib calibration_result.npz
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Camera_run4dof_stream - chay doc lap de kiem tra")
+    parser.add_argument("--calib", type=str, default="calibration_result.npz")
+    parser.add_argument("--camera", type=int, default=0)
+    parser.add_argument("--brightness", type=float, default=80.0)
+    parser.add_argument("--no-extra", action="store_true",
+                        help="Khong hien thi cua so anh RGB va anh nhi phan.")
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.calib):
+        print(f"LOI: Khong tim thay file calib '{args.calib}'.")
+        return
+
+    state = {"run": True}
+    gen = run_camera_run4dof_stream(
+        args.camera, args.calib, is_running=lambda: state["run"],
+        brightness=args.brightness, show_extra=not args.no_extra,
+    )
+    try:
+        for display, items, fps in gen:
+            cv2.putText(display, f"FPS: {fps:.1f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.imshow("Camera_run4dof_stream", display)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                state["run"] = False
+                break
+    finally:
+        gen.close()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    _main()

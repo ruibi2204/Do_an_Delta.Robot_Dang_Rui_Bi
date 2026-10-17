@@ -101,12 +101,12 @@ class CsvWindow(BaseTabWindow):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setFixedSize(560, 420)
         self.video_label.setStyleSheet(
-            "QLabel { background-color:#101010; color:#cccccc; border:2px solid #c0c0c0; border-radius:8px; }"
+            "QLabel { background-color:#0f2540; color:#b9d2ee; border:2px solid #1a7ee0; border-radius:10px; }"
         )
         left_col.addWidget(self.video_label, 0, Qt.AlignTop | Qt.AlignHCenter)
 
         self.lbl_cam_status = QLabel("FPS: -- | ĐÃ PHÁT HIỆN: --")
-        self.lbl_cam_status.setStyleSheet("color:#333333; font-size:11pt;")
+        self.lbl_cam_status.setStyleSheet("color:#12315c; font-size:11pt;")
         left_col.addWidget(self.lbl_cam_status)
 
         left_col.addStretch(1)
@@ -202,16 +202,16 @@ class CsvWindow(BaseTabWindow):
         self.btn_start.setObjectName("actionBtn")
         self.btn_start.clicked.connect(self.on_start)
         self.btn_stop = QPushButton("⏹ DỪNG")
-        self.btn_stop.setObjectName("disconnectBtn")
+        self.btn_stop.setObjectName("dynStopBtn")
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_stop.setEnabled(False)
-        run_row.addWidget(self.btn_start, 3)
+        run_row.addWidget(self.btn_start, 1)
         run_row.addWidget(self.btn_stop, 1)
         right_col.addLayout(run_row)
 
         self.lbl_csv_progress = QLabel("SẴN SÀNG.")
         self.lbl_csv_progress.setWordWrap(True)
-        self.lbl_csv_progress.setStyleSheet("color:#333333; font-weight:700; font-size:12pt;")
+        self.lbl_csv_progress.setStyleSheet("color:#12315c; font-weight:700; font-size:12pt;")
         right_col.addWidget(self.lbl_csv_progress)
 
         self.log_box_csv = QTextEdit()

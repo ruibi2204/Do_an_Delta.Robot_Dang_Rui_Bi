@@ -165,14 +165,14 @@ class DynamicRun4DofWindow(BaseTabWindow):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(720, 480)
         self.video_label.setStyleSheet(
-            "background-color:#0f2540; border:2px solid #2a4a75; "
-            "border-radius:10px; color:#9fb6d6;"
+            "background-color:#0f2540; border:2px solid #1a7ee0; "
+            "border-radius:10px; color:#b9d2ee;"
         )
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         video_col.addWidget(self.video_label, 5)
 
         self.lbl_fps = QLabel("FPS: --")
-        self.lbl_fps.setStyleSheet("color:#333333; font-weight:700;")
+        self.lbl_fps.setStyleSheet("color:#12315c; font-weight:700;")
         video_col.addWidget(self.lbl_fps)
 
         cam_btn_row = QHBoxLayout()
@@ -202,7 +202,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
 
         # ---------- Nhãn trạng thái pha PICK / PLACE ----------
         self.lbl_phase = QLabel("Trạng thái: (chưa chạy)")
-        self.lbl_phase.setStyleSheet("color:#555555; font-weight:700;")
+        self.lbl_phase.setStyleSheet("color:#4b6a93; font-weight:700;")
         video_col.addWidget(self.lbl_phase)
 
         # ---------- Cột điều khiển ----------
@@ -291,7 +291,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
         bias_layout.addLayout(bias_row)
 
         self.lbl_bias_saved_state = QLabel("(chưa có dữ liệu)")
-        self.lbl_bias_saved_state.setStyleSheet("color:#9fb6d6;")
+        self.lbl_bias_saved_state.setStyleSheet("color:#4b6a93;")
         bias_layout.addWidget(self.lbl_bias_saved_state)
 
         self.btn_save_bias = QPushButton("💾 LƯU BIAS HIỆN TẠI")
@@ -325,7 +325,7 @@ class DynamicRun4DofWindow(BaseTabWindow):
         recal_layout.addLayout(recal_row)
 
         self.lbl_recal_progress = QLabel(self._compute_recal_progress_text())
-        self.lbl_recal_progress.setStyleSheet("color:#0078d4; font-weight:700;")
+        self.lbl_recal_progress.setStyleSheet("color:#1670d4; font-weight:700;")
         recal_layout.addWidget(self.lbl_recal_progress)
 
         recal_box.setLayout(recal_layout)
@@ -565,10 +565,10 @@ class DynamicRun4DofWindow(BaseTabWindow):
         )
         if is_saved:
             self.lbl_bias_saved_state.setText("✔ Đã lưu (khớp với robot_config.json)")
-            self.lbl_bias_saved_state.setStyleSheet("color:#4cd98a; font-weight:700;")
+            self.lbl_bias_saved_state.setStyleSheet("color:#0b7a3e; font-weight:700;")
         else:
             self.lbl_bias_saved_state.setText('● CHƯA LƯU - bấm "LƯU BIAS HIỆN TẠI" nếu muốn giữ lại')
-            self.lbl_bias_saved_state.setStyleSheet("color:#e0a13a; font-weight:700;")
+            self.lbl_bias_saved_state.setStyleSheet("color:#b45309; font-weight:700;")
 
     def _refresh_turn_label(self):
         if self.ctx.turn_state:

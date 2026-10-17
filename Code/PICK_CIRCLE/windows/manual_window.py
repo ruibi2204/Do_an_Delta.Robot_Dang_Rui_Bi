@@ -31,7 +31,7 @@ TRAJ_MAX_POINTS = 400
 # ---------------------------------------------------------------------
 GEAR_RATIO_DEFAULT = 3.3
 
-ARM_COLORS = ("#e63946", "#00ff7f", "#3f8efc")   # đỏ / xanh lá / xanh dương - giống hình mẫu
+ARM_COLORS = ("#e63946", "#16a34a", "#1a7ee0")   # đỏ / xanh lá / xanh dương - giống hình mẫu
 
 # ---------------------------------------------------------------------
 # BẬC TỰ DO 4 (bàn xoay / step, điều khiển qua UART 2: lệnh "STEP:<độ>")
@@ -131,13 +131,13 @@ class TriangleButton(QPushButton):
         p.setRenderHint(QPainter.Antialiasing, True)
 
         if not self.isEnabled():
-            fill, border, text_color = QColor("#d0d0d0"), QColor("#b0b0b0"), QColor("#888888")
+            fill, border, text_color = QColor("#d9dde3"), QColor("#c3c9d1"), QColor("#8e98a6")
         elif self._pressed:
-            fill, border, text_color = QColor("#4da6ff"), QColor("#2a7dd6"), QColor("#ffffff")
+            fill, border, text_color = QColor("#1a7ee0"), QColor("#1262b4"), QColor("#ffffff")
         elif self._hover:
-            fill, border, text_color = QColor("#cde0ff"), QColor("#4da6ff"), QColor("#1a1a1a")
+            fill, border, text_color = QColor("#d3e6fa"), QColor("#1a7ee0"), QColor("#12315c")
         else:
-            fill, border, text_color = QColor("#e8e8e8"), QColor("#b0b0b0"), QColor("#1a1a1a")
+            fill, border, text_color = QColor("#e6f0fb"), QColor("#8fbbea"), QColor("#12315c")
 
         cx = self.width() / 2.0
         cy = self.height() / 2.0
@@ -208,13 +208,13 @@ class ArcArrowButton(QPushButton):
         p.setRenderHint(QPainter.Antialiasing, True)
 
         if not self.isEnabled():
-            fill, border, text_color = QColor("#d0d0d0"), QColor("#b0b0b0"), QColor("#888888")
+            fill, border, text_color = QColor("#d9dde3"), QColor("#c3c9d1"), QColor("#8e98a6")
         elif self._pressed:
-            fill, border, text_color = QColor("#4da6ff"), QColor("#2a7dd6"), QColor("#ffffff")
+            fill, border, text_color = QColor("#1a7ee0"), QColor("#1262b4"), QColor("#ffffff")
         elif self._hover:
-            fill, border, text_color = QColor("#cde0ff"), QColor("#4da6ff"), QColor("#e8f1ff")
+            fill, border, text_color = QColor("#d3e6fa"), QColor("#1a7ee0"), QColor("#12315c")
         else:
-            fill, border, text_color = QColor("#e8e8e8"), QColor("#b0b0b0"), QColor("#e8f1ff")
+            fill, border, text_color = QColor("#e6f0fb"), QColor("#8fbbea"), QColor("#12315c")
 
         cx = self.width() / 2.0
         cy = self.height() / 2.0
@@ -433,7 +433,7 @@ class ManualWindow(BaseTabWindow):
 
         self.lbl_angles = QLabel("θ1:--°  θ2:--°  θ3:--°")
         self.lbl_angles.setAlignment(Qt.AlignCenter)
-        self.lbl_angles.setStyleSheet("color:#cfe3ff; font-size:11pt;")
+        self.lbl_angles.setStyleSheet("color:#12315c; font-size:11pt;")
         pos_layout.addWidget(self.lbl_angles)
 
         pos_box.setLayout(pos_layout)
@@ -473,7 +473,7 @@ class ManualWindow(BaseTabWindow):
         self.btn_center_info.setAlignment(Qt.AlignCenter)
         self.btn_center_info.setFixedSize(CELL, CELL)
         self.btn_center_info.setStyleSheet(
-            "font-size:14pt; font-weight:800; color:#9fb6d6;"
+            "font-size:14pt; font-weight:800; color:#4b6a93;"
         )
 
         xy_grid.addWidget(self.btn_y_plus,      0, 1)
@@ -497,7 +497,7 @@ class ManualWindow(BaseTabWindow):
         # -- đường phân cách dọc giữa XY và Z --
         sep = QLabel("")
         sep.setFixedWidth(2)
-        sep.setStyleSheet("background-color:#2a4a75;")
+        sep.setStyleSheet("background-color:#cfe0f3;")
         xyz_layout.addWidget(sep)
 
         # -- cột Z: 2 tam giác đều cùng cỡ XY, căn giữa dọc --
@@ -593,7 +593,7 @@ class ManualWindow(BaseTabWindow):
 
         self.lbl_speed_value = QLabel(f"{int(self.ctx.jog_speed)} mm/s")
         self.lbl_speed_value.setAlignment(Qt.AlignCenter)
-        self.lbl_speed_value.setStyleSheet("font-size:11pt; font-weight:600; color:#4da6ff;")
+        self.lbl_speed_value.setStyleSheet("font-size:11pt; font-weight:600; color:#1a7ee0;")
 
         speed_layout.addWidget(self.slider_speed)
         speed_layout.addWidget(self.lbl_speed_value)
@@ -640,7 +640,7 @@ class ManualWindow(BaseTabWindow):
         home_layout.addLayout(home_btn_row)
 
         self.lbl_saved_home = QLabel(self._home_str())
-        self.lbl_saved_home.setStyleSheet("color:#4cd98a; font-size:10.5pt;")
+        self.lbl_saved_home.setStyleSheet("color:#0b7a3e; font-size:10.5pt;")
         self.lbl_saved_home.setWordWrap(True)
         home_layout.addWidget(self.lbl_saved_home)
 
@@ -649,7 +649,7 @@ class ManualWindow(BaseTabWindow):
 
         self.lbl_manual_status = QLabel("SẴN SÀNG.")
         self.lbl_manual_status.setWordWrap(True)
-        self.lbl_manual_status.setStyleSheet("color:#cfe3ff; font-size:10.5pt;")
+        self.lbl_manual_status.setStyleSheet("color:#12315c; font-size:10.5pt;")
         controls_col.addWidget(self.lbl_manual_status)
         controls_col.addStretch()
 
@@ -661,32 +661,32 @@ class ManualWindow(BaseTabWindow):
         chart_layout = QVBoxLayout()
 
         self.fig = Figure(figsize=(4.8, 6.2))
-        self.fig.patch.set_facecolor("#0f2540")
+        self.fig.patch.set_facecolor("#ffffff")
         self.fig.subplots_adjust(hspace=0.45, left=0.12, right=0.97, top=0.93, bottom=0.09)
         self.canvas = FigureCanvas(self.fig)
-        self.canvas.setStyleSheet("background-color:#0f2540;")
+        self.canvas.setStyleSheet("background-color:#ffffff;")
 
         self.ax_link = self.fig.add_subplot(2, 1, 1)
         self.ax_motor = self.fig.add_subplot(2, 1, 2)
         self._style_axis(self.ax_link, "Góc 3 cánh tay chủ động (Chưa qua tỷ số truyền)")
         self._style_axis(self.ax_motor, "Góc 3 động cơ (Đã qua tỷ số truyền)")
-        self.ax_motor.set_xlabel("t (s)", color="#cfe3ff")
+        self.ax_motor.set_xlabel("t (s)", color="#12315c")
 
         self._lines_link = [
             self.ax_link.plot([], [], color=c, lw=2, label=f"Cánh tay {i + 1}")[0]
             for i, c in enumerate(ARM_COLORS)
         ]
-        leg1 = self.ax_link.legend(loc="upper right", fontsize=8, facecolor="#0f2540", edgecolor="#2a4a75")
+        leg1 = self.ax_link.legend(loc="upper right", fontsize=8, facecolor="#ffffff", edgecolor="#c5d8ee")
         for t in leg1.get_texts():
-            t.set_color("#e8f1ff")
+            t.set_color("#12315c")
 
         self._lines_motor = [
             self.ax_motor.plot([], [], color=c, lw=2, ls="--", label=f"Motor {i + 1}")[0]
             for i, c in enumerate(ARM_COLORS)
         ]
-        leg2 = self.ax_motor.legend(loc="upper right", fontsize=8, facecolor="#0f2540", edgecolor="#2a4a75")
+        leg2 = self.ax_motor.legend(loc="upper right", fontsize=8, facecolor="#ffffff", edgecolor="#c5d8ee")
         for t in leg2.get_texts():
-            t.set_color("#e8f1ff")
+            t.set_color("#12315c")
 
         chart_layout.addWidget(self.canvas, 1)
 
@@ -712,13 +712,13 @@ class ManualWindow(BaseTabWindow):
 
     # ---------------- Đồ thị real-time ----------------
     def _style_axis(self, ax, title):
-        ax.set_facecolor("#0f2540")
-        ax.set_title(title, color="#e8f1ff", fontsize=9.5, fontweight="bold")
-        ax.set_ylabel("Góc (độ)", color="#cfe3ff")
-        ax.tick_params(colors="#9fb6d6", labelsize=8)
+        ax.set_facecolor("#f5f9fe")
+        ax.set_title(title, color="#0d3b82", fontsize=9.5, fontweight="bold")
+        ax.set_ylabel("Góc (độ)", color="#12315c")
+        ax.tick_params(colors="#4b6a93", labelsize=8)
         for spine in ax.spines.values():
-            spine.set_color("#2a4a75")
-        ax.grid(True, color="#2a4a75", alpha=0.4)
+            spine.set_color("#c5d8ee")
+        ax.grid(True, color="#cfe0f3", alpha=0.8)
 
     def _reset_chart(self):
         for buf in self._buf_theta:
@@ -809,10 +809,10 @@ class ManualWindow(BaseTabWindow):
         connected = bool(uart2 is not None and uart2.is_connected)
         if connected:
             self.lbl_uart2_state.setText("UART 2: ĐÃ KẾT NỐI")
-            self.lbl_uart2_state.setStyleSheet("color:#4cd98a; font-size:10.5pt; font-weight:700;")
+            self.lbl_uart2_state.setStyleSheet("color:#0b7a3e; font-size:10.5pt; font-weight:700;")
         else:
             self.lbl_uart2_state.setText("UART 2: CHƯA KẾT NỐI")
-            self.lbl_uart2_state.setStyleSheet("color:#9aa7b8; font-size:10.5pt; font-weight:700;")
+            self.lbl_uart2_state.setStyleSheet("color:#6b7f99; font-size:10.5pt; font-weight:700;")
 
     def _set_dof4_buttons_enabled(self, enabled):
         self.btn_dof4_cw.setEnabled(enabled)

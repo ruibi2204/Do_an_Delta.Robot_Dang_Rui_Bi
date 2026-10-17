@@ -9,7 +9,7 @@ def resource_path(relative_path: str) -> str:
     base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QDoubleValidator, QPixmap, QPainter, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -69,9 +69,9 @@ LOGO_MARGIN = 18        # khoảng cách từ logo tới mép trên/phải cửa
 # 3 NÚT NHỎ xếp NGANG trên 1 hàng (Tham số động học / Đánh giá cơ khí /
 # Menu chức năng) - nhỏ hơn để vừa bày theo chiều ngang.
 # ---------------------------------------------------------------------
-TOP_BTN_WIDTH  = 280
-TOP_BTN_HEIGHT = 64
-TOP_BTN_SPACING = 24
+TOP_BTN_WIDTH  = 380
+TOP_BTN_HEIGHT = 88
+TOP_BTN_SPACING = 32
 
 # Giữ tên biến cũ để tương thích với phần còn lại của file.
 MAIN_BTN_WIDTH  = TOP_BTN_WIDTH
@@ -86,10 +86,10 @@ QPushButton#mainMenuBtn {
     background-color: #0078d4;
     color: #ffffff;
     border: 2px solid #005fa8;
-    border-radius: 14px;
+    border-radius: 16px;
     padding: 8px 14px;
     font-weight: 700;
-    font-size: 12pt;
+    font-size: 15pt;
 }
 QPushButton#mainMenuBtn:hover {
     background-color: #005fa8;
@@ -151,24 +151,24 @@ QPushButton#dialogCloseBtn:hover {
 KIN_APPLY_BTN_WIDTH = 260
 KIN_APPLY_BTN_HEIGHT = 52
 
-# Danh sách 5 mục điều hướng trước đây nằm ở cột trái, nay đưa vào hộp
+# Danh sách 4 mục điều hướng trước đây nằm ở cột trái, nay đưa vào hộp
 # thoại "MENU CHỨC NĂNG". Tên nút đã dịch sang tiếng Việt, VIẾT HOA toàn bộ
-# để đồng bộ với 4 nút chính. "Bù trừ tọa độ" là thuật ngữ kỹ thuật chuyên
-# nghiệp hơn cho "offset tọa độ".
+# để đồng bộ với 4 nút chính.
 NAV_MENU_ITEMS = [
     ("ĐIỀU KHIỂN THỦ CÔNG", "manual", ManualWindow),
-    ("CAMERA && BÙ TRỪ TỌA ĐỘ", "camera", CameraWindow),
-    ("GẮP THẢ TĨNH", "csv", CsvWindow),
-    ("GẮP THẢ TĨNH 4 BẬC TỰ DO", "dynamic", DynamicWindow),
+    ("GẮP THẢ TĨNH_HÌNH TRÒN", "csv", CsvWindow),
+    ("GẮP THẢ TĨNH_4 BẬC TỰ DO", "dynamic", DynamicWindow),
     ("GẮP THẢ ĐỘNG", "dynamic_run4dof", DynamicRun4DofWindow),
 ]
 
-# Danh sách 3 mục đánh giá cơ khí, đưa vào hộp thoại "ĐÁNH GIÁ CƠ KHÍ".
-# Tên nút đã dịch sang tiếng Việt, VIẾT HOA toàn bộ.
+# Danh sách 4 mục đánh giá robot, đưa vào hộp thoại "ĐÁNH GIÁ ROBOT".
+# Tên nút đã dịch sang tiếng Việt, VIẾT HOA toàn bộ. "Bù trừ tọa độ" là
+# thuật ngữ kỹ thuật chuyên nghiệp hơn cho "offset tọa độ".
 ROBOT_EVAL_ITEMS = [
     ("ĐÁNH GIÁ ĐỘ LẶP LẠI", "repeat_test", RepeatTestWindow),
     ("VẼ HÌNH", "draw", DrawWindow),
     ("HIỆU CHỈNH CAMERA", "board_calib", BoardCalibWindow),
+    ("KIỂM CHỨNG SAI SỐ HỆ THỐNG", "camera", CameraWindow),
 ]
 
 
@@ -265,6 +265,7 @@ class LauncherWindow(QMainWindow):
 
         self._nav_dialog = None
         self._eval_dialog = None
+        self._hub_dialog = None
 
         self._conn_win_embed = None  # sẽ được tạo trong _build_ui
         self._build_ui()
@@ -349,13 +350,13 @@ class LauncherWindow(QMainWindow):
     # -----------------------------------------------------------------
     def _build_control_panel(self):
         """Bảng điều khiển:
-          - Hàng trên: 3 nút nhỏ xếp NGANG đều (Tham số ĐH / Đánh giá CK / Menu)
+          - Hàng trên: 2 nút (THAM SỐ ĐỘNG HỌC / TRUNG TÂM ĐIỀU KHIỂN) canh giữa
           - Bên dưới: khung ConnectionWindow nhúng trực tiếp (embed)
         """
         outer = QVBoxLayout()
         outer.setSpacing(14)
 
-        # ---- Hàng 3 nút nhỏ trải đều trái → phải ----
+        # ---- 2 nút cùng kích thước, canh giữa ----
         btn_row = QHBoxLayout()
         btn_row.setSpacing(TOP_BTN_SPACING)
         btn_row.addStretch(1)
@@ -364,13 +365,9 @@ class LauncherWindow(QMainWindow):
         btn_kin.clicked.connect(self._open_kinematics_dialog)
         btn_row.addWidget(btn_kin)
 
-        btn_eval = self._make_main_button("ĐÁNH GIÁ CƠ KHÍ")
-        btn_eval.clicked.connect(self._open_robot_eval_menu)
-        btn_row.addWidget(btn_eval)
-
-        btn_menu = self._make_main_button("MENU CHỨC NĂNG")
-        btn_menu.clicked.connect(self._open_nav_menu)
-        btn_row.addWidget(btn_menu)
+        btn_hub = self._make_main_button("TRUNG TÂM ĐIỀU KHIỂN")
+        btn_hub.clicked.connect(self._open_control_hub)
+        btn_row.addWidget(btn_hub)
 
         btn_row.addStretch(1)
         outer.addLayout(btn_row)
@@ -390,6 +387,51 @@ class LauncherWindow(QMainWindow):
         btn.setFixedWidth(MAIN_BTN_WIDTH)
         btn.setFixedHeight(MAIN_BTN_HEIGHT)
         return btn
+
+    # -----------------------------------------------------------------
+    # HỘP THOẠI "TRUNG TÂM ĐIỀU KHIỂN" - gom: nút Đánh giá robot +
+    # 4 nút điều hướng (Thủ công / Gắp thả tĩnh / Tĩnh 4 bậc / Động)
+    # -----------------------------------------------------------------
+    def _open_control_hub(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Trung tâm điều khiển")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(SUB_BTN_SPACING)
+
+        title = QLabel("TRUNG TÂM ĐIỀU KHIỂN")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 15pt; font-weight: 800; color: #0078d4;")
+        layout.addWidget(title)
+        layout.addSpacing(6)
+
+        hub_items = [
+            ("ĐÁNH GIÁ ROBOT", self._open_robot_eval_menu),
+        ]
+        for text, handler in hub_items:
+            btn = _make_sub_menu_button(text)
+            btn.clicked.connect(lambda checked=False, h=handler: self._hub_and_close(dialog, h))
+            layout.addWidget(btn)
+
+        # 4 nút điều hướng lấy ra từ nút ĐIỀU KHIỂN CHÍNH cũ, mở thẳng cửa sổ tab
+        for text, key, cls in NAV_MENU_ITEMS:
+            btn = _make_sub_menu_button(text)
+            btn.clicked.connect(lambda checked=False, k=key, c=cls: self._nav_and_close(dialog, k, c))
+            layout.addWidget(btn)
+
+        layout.addSpacing(8)
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_row.addWidget(_make_dialog_close_button(dialog))
+        close_row.addStretch(1)
+        layout.addLayout(close_row)
+
+        self._hub_dialog = dialog
+        dialog.exec()
+
+    def _hub_and_close(self, dialog: QDialog, handler):
+        dialog.accept()                  # đóng hộp thoại trung tâm trước
+        QTimer.singleShot(0, handler)    # rồi mới mở hộp thoại con
 
     # -----------------------------------------------------------------
     # (1) HỘP THOẠI "MENU CHỨC NĂNG" - gom 5 nút điều hướng cũ
@@ -423,7 +465,7 @@ class LauncherWindow(QMainWindow):
         dialog.exec()
 
     # -----------------------------------------------------------------
-    # (3) HỘP THOẠI "ĐÁNH GIÁ CƠ KHÍ" - gom 3 nút Repeat/Draw/Camera Calib
+    # (3) HỘP THOẠI "ĐÁNH GIÁ ROBOT" - gom 4 nút Repeat/Draw/Camera Calib/Offset
     # -----------------------------------------------------------------
     def _open_robot_eval_menu(self):
         dialog = QDialog(self)
@@ -432,7 +474,7 @@ class LauncherWindow(QMainWindow):
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(SUB_BTN_SPACING)
 
-        title = QLabel("ĐÁNH GIÁ CƠ KHÍ ROBOT")
+        title = QLabel("ĐÁNH GIÁ ROBOT")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("font-size: 15pt; font-weight: 800; color: #0078d4;")
         layout.addWidget(title)

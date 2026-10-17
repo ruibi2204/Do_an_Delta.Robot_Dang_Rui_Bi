@@ -20,40 +20,43 @@ SPEED_PERCENT_DEFAULT = 100
 # kinematics/repeat_kinematics.py) khi chưa có gì lưu trong config.
 Z_DOWN_DEFAULT = 10.0
 
-# Nút hành động thường (Start/Run/Chọn file/...) - màu VÀNG NHẠT, đồng bộ
+# Nút hành động thường (Start/Run/Chọn file/...) - màu XANH DƯƠNG gradient, đồng bộ
 # với windows/board_calib_window.py.
 GRAY_BTN_STYLE = """
 QPushButton#grayActionBtn {
-    background-color: #fff3b0;
-    color: #1a1a1a;
-    border: 2px solid #d9b800;
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3a9bf0, stop:1 #1670d4);
+    color: #ffffff;
+    border: 2px solid #1670d4;
     border-radius: 12px;
     padding: 12px 18px;
     font-weight: 700;
     font-size: 14pt;
     min-height: 40px;
 }
-QPushButton#grayActionBtn:hover { background-color: #ffe680; }
-QPushButton#grayActionBtn:pressed { background-color: #f2d24d; }
-QPushButton#grayActionBtn:disabled { background-color: #2a4a75; border-color: #2a4a75; color: #7f93ad; }
+QPushButton#grayActionBtn:hover {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #55aef6, stop:1 #2285e6);
+    border-color: #1262b4;
+}
+QPushButton#grayActionBtn:pressed { background-color: #1262b4; }
+QPushButton#grayActionBtn:disabled { background-color: #d9dde3; border-color: #c3c9d1; color: #8e98a6; }
 """
 
-# Nút DỪNG / HUỶ (Stop / Cancel) - màu XANH DƯƠNG, đồng bộ với
+# Nút DỪNG / HUỶ (Stop / Cancel) - màu XÁM, đồng bộ với
 # windows/board_calib_window.py.
 RED_BTN_STYLE = """
 QPushButton#redActionBtn {
-    background-color: #0078d4;
-    color: #ffffff;
-    border: 2px solid #005fa8;
+    background-color: #e3e7ec;
+    color: #3d4b5e;
+    border: 2px solid #c3c9d1;
     border-radius: 12px;
     padding: 12px 18px;
     font-weight: 700;
     font-size: 14pt;
     min-height: 40px;
 }
-QPushButton#redActionBtn:hover { background-color: #005fa8; }
-QPushButton#redActionBtn:pressed { background-color: #00477e; }
-QPushButton#redActionBtn:disabled { background-color: #2a4a75; border-color: #2a4a75; color: #7f93ad; }
+QPushButton#redActionBtn:hover { background-color: #d3d9e0; border-color: #9aa7b8; }
+QPushButton#redActionBtn:pressed { background-color: #bcc2ca; color: #1f2d40; }
+QPushButton#redActionBtn:disabled { background-color: #d9dde3; border-color: #c3c9d1; color: #8e98a6; }
 """
 
 
@@ -214,12 +217,12 @@ class RepeatTestWindow(BaseTabWindow):
 
         self.lbl_speed_value = QLabel(f"{self.slider_speed.value()}%")
         self.lbl_speed_value.setAlignment(Qt.AlignCenter)
-        self.lbl_speed_value.setStyleSheet("font-size:13pt; font-weight:600; color:#0a5b8a;")
+        self.lbl_speed_value.setStyleSheet("font-size:13pt; font-weight:600; color:#1670d4;")
 
         speed_hint = QLabel("100% = mặc định, kéo để nhanh/chậm hơn")
         speed_hint.setAlignment(Qt.AlignCenter)
         speed_hint.setWordWrap(True)
-        speed_hint.setStyleSheet("color:#666666; font-size:9pt;")
+        speed_hint.setStyleSheet("color:#4b6a93; font-size:9pt;")
 
         speed_layout.addWidget(self.slider_speed)
         speed_layout.addWidget(self.lbl_speed_value)

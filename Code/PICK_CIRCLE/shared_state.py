@@ -539,23 +539,23 @@ def cv2_to_qpixmap(frame_bgr):
 
 
 def apply_light_palette(app):
-    # Tên hàm giữ nguyên để chỗ gọi không phải sửa, nhưng giờ là theme TỐI:
-    # nền xanh dương đen, đậm hơn màu nút (#0078d4).
+    # Theme SÁNG xanh dương nhạt, giống ảnh mẫu: nền trắng ngả xanh, khung
+    # trắng viền xanh nhạt, chữ xanh navy, nút xanh dương gradient.
     palette = QPalette()
-    bg = QColor("#0a1a2f")        # nền chính: xanh dương đen
-    base = QColor("#0f2540")      # nền ô nhập / bảng / log
-    text = QColor("#e8f1ff")
-    disabled_text = QColor("#7f93ad")
-    highlight = QColor("#0078d4")
+    bg = QColor("#f2f8ff")        # nền chính: trắng ngả xanh rất nhạt
+    base = QColor("#ffffff")      # nền ô nhập / bảng / log
+    text = QColor("#12315c")      # chữ xanh navy
+    disabled_text = QColor("#9aa7b8")
+    highlight = QColor("#1a7ee0")
 
     palette.setColor(QPalette.Window, bg)
     palette.setColor(QPalette.WindowText, text)
     palette.setColor(QPalette.Base, base)
-    palette.setColor(QPalette.AlternateBase, bg)
+    palette.setColor(QPalette.AlternateBase, QColor("#eef5fc"))
     palette.setColor(QPalette.ToolTipBase, base)
     palette.setColor(QPalette.ToolTipText, text)
     palette.setColor(QPalette.Text, text)
-    palette.setColor(QPalette.Button, bg)
+    palette.setColor(QPalette.Button, base)
     palette.setColor(QPalette.ButtonText, text)
     palette.setColor(QPalette.BrightText, Qt.white)
     palette.setColor(QPalette.Highlight, highlight)
@@ -566,102 +566,141 @@ def apply_light_palette(app):
 
 
 # =====================================================================
-# BẢNG MÀU DÙNG CHUNG CHO TOÀN BỘ NÚT NHẤN TRONG ỨNG DỤNG
+# BẢNG MÀU DÙNG CHUNG CHO TOÀN BỘ GIAO DIỆN (theo ảnh mẫu)
 # ---------------------------------------------------------------------
-# Theo yêu cầu: TẤT CẢ các nút trước đây tô màu XÁM ĐẬM (#757575 và các nút
-# "gray-primary" khác như backBtn #6c757d) nay chuyển sang XANH DƯƠNG (cùng
-# tông với màu nhấn #0078d4 đã dùng cho tiêu đề/khung viền). Các nút trước
-# đây tô màu ĐỎ (cảnh báo/ngắt kết nối/tắt thiết bị...) nay chuyển sang MÀU
-# XÁM trung tính (không còn dùng đỏ trong toàn bộ giao diện).
-# NỀN GIAO DIỆN: xanh dương đen (#0a1a2f), đậm hơn màu nút (#0078d4).
+# - Nền cửa sổ: trắng ngả xanh nhạt (#f2f8ff).
+# - Khung (QGroupBox), ô nhập, log, bảng: nền trắng, viền xanh nhạt.
+# - Chữ: xanh navy (#12315c); tiêu đề khung đậm hơn (#0d3b82).
+# - Nút chính: xanh dương gradient (#3a9bf0 -> #1670d4), chữ trắng.
+# - Nút phụ / trạng thái vô hiệu hóa: xám nhạt (#d9dde3), chữ xám.
+# - Nút trung tính (ví dụ "● TẮT"): trắng, viền xanh nhạt, chữ navy.
 # =====================================================================
-BTN_BLUE = "#0078d4"
-BTN_BLUE_HOVER = "#005fa8"
-BTN_BLUE_PRESSED = "#00477e"
-BTN_BLUE_BORDER = "#005fa8"
+BTN_BLUE = "#1a7ee0"
+BTN_BLUE_HOVER = "#2f90ee"
+BTN_BLUE_PRESSED = "#1262b4"
+BTN_BLUE_BORDER = "#1670d4"
 
-BTN_GRAY = "#757575"
-BTN_GRAY_HOVER = "#616161"
-BTN_GRAY_PRESSED = "#4a4a4a"
-BTN_GRAY_BORDER = "#5a6268"
+BTN_GRAY = "#d9dde3"
+BTN_GRAY_HOVER = "#cdd2d9"
+BTN_GRAY_PRESSED = "#bcc2ca"
+BTN_GRAY_BORDER = "#c3c9d1"
 
-# Font chữ dùng chung cho toàn bộ giao diện: Times New Roman (có fallback
-# "Times" / "serif" cho các hệ điều hành không có sẵn font Times New Roman,
-# ví dụ Linux). Khung nhật ký (QTextEdit log) vẫn giữ font monospace
-# (Consolas) để dễ đọc log kỹ thuật, không đổi sang Times New Roman.
-APP_FONT_FAMILY = "'Times New Roman', Times, serif"
+# Font chữ dùng chung: sans-serif giống ảnh mẫu (Segoe UI trên Windows, có
+# fallback cho hệ điều hành khác). Khung nhật ký vẫn dùng monospace.
+APP_FONT_FAMILY = "'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif"
 
 
 STYLE_SHEET = """
-QWidget { background-color: #0a1a2f; color: #e8f1ff; font-family: 'Times New Roman', Times, serif; font-size: 14pt; }
-QMainWindow { background-color: #0a1a2f; }
-QDialog { background-color: #0a1a2f; color: #e8f1ff; }
-QMessageBox { background-color: #0a1a2f; color: #e8f1ff; }
-QToolTip { background-color: #0f2540; color: #e8f1ff; border: 1px solid #2a4a75; }
-QGroupBox { border: 2px solid #2a4a75; border-radius: 12px; margin-top: 14px; font-weight: 700; font-size: 13pt; padding-top: 10px; color: #e8f1ff; }
-QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; }
-QPushButton { background-color: #e0e0e0; color: #1a1a1a; border-radius: 14px; border: 2px solid #b0b0b0; padding: 10px; font-weight: 700; font-size: 15pt; }
-QPushButton:hover { background-color: #d0d0d0; border-color: #757575; }
-QPushButton:pressed { background-color: #757575; color: #ffffff; }
-QPushButton:disabled { background-color: #d0d0d0; color: #888888; border-color: #b0b0b0; }
-QPushButton#jogBtn { background-color: #e8e8e8; color: #1a1a1a; font-size: 13pt; font-weight: 700; min-height: 56px; max-height: 72px; padding: 4px 6px; border-radius: 10px; }
-QPushButton#jogBtn:hover { background-color: #cde0ff; border-color: #4da6ff; }
-QPushButton#jogBtn:pressed { background-color: #4da6ff; color: #ffffff; }
-QPushButton#homeBtn { background-color: #d0d0d0; border-color: #b0b0b0; font-size: 11pt; min-height: 0px; max-height: 28px; padding: 2px 6px; }
-QPushButton#homeBtn:hover { background-color: #c0c0c0; }
-QPushButton#saveBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; font-size: 11pt; min-height: 0px; max-height: 28px; padding: 2px 6px; }
-QPushButton#saveBtn:hover { background-color: #005fa8; }
-QPushButton#connectBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 38px; font-size: 11pt; padding: 6px; }
-QPushButton#connectBtn:hover { background-color: #005fa8; }
-QPushButton#disconnectBtn { background-color: #757575; color: #ffffff; border-color: #5a6268; min-height: 38px; font-size: 11pt; padding: 6px; }
-QPushButton#disconnectBtn:hover { background-color: #616161; }
-QPushButton#actionBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 65px; font-size: 16pt; }
-QPushButton#actionBtn:hover { background-color: #005fa8; }
-QPushButton#dynStartBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 65px; font-size: 16pt; }
-QPushButton#dynStartBtn:hover { background-color: #005fa8; }
-QPushButton#dynStopBtn { background-color: #757575; color: #ffffff; border-color: #5a6268; min-height: 65px; font-size: 16pt; }
-QPushButton#dynStopBtn:hover { background-color: #616161; }
-QPushButton#deviceOnBtn { background-color: #0078d4; color: #ffffff; border-color: #005fa8; min-height: 36px; font-size: 11pt; padding: 4px; }
-QPushButton#deviceOnBtn:hover { background-color: #005fa8; }
-QPushButton#deviceOffBtn { background-color: #757575; color: #ffffff; border-color: #5a6268; min-height: 36px; font-size: 11pt; padding: 4px; }
-QPushButton#deviceOffBtn:hover { background-color: #616161; }
-QPushButton#deviceApplyBtn { background-color: #b0b0b0; color: #1a1a1a; min-height: 32px; font-size: 10pt; padding: 4px; }
-QPushButton#deviceApplyBtn:hover { background-color: #a0a0a0; }
-QPushButton#deviceQuickBtn { background-color: #e0e0e0; color: #1a1a1a; min-height: 30px; font-size: 10pt; padding: 2px; border-color: #b0b0b0; }
-QPushButton#deviceQuickBtn:hover { background-color: #d0d0d0; border-color: #0078d4; }
-QPushButton#backBtn { background-color: #0078d4; color: #ffffff; min-height: 44px; font-size: 12pt; border-color: #005fa8; }
-QPushButton#backBtn:hover { background-color: #005fa8; }
-QPushButton#menuBtn { min-height: 80px; font-size: 17pt; background-color: #0078d4; color: #ffffff; border-color: #005fa8; }
-QPushButton#menuBtn:hover { background-color: #005fa8; }
-QLabel#menuTitle1 { font-size: 22pt; font-weight: 900; color: #4da6ff; }
-QLabel#menuTitle2 { font-size: 18pt; font-weight: 800; color: #e8f1ff; }
-QLabel#menuTitle3 { font-size: 14pt; font-weight: 700; color: #9fb6d6; }
-QLabel#menuTitle4 { font-size: 15pt; font-weight: 800; color: #cfe3ff; }
-QLabel#posDisplay { background-color: #0f2540; border: 2px solid #0078d4; border-radius: 10px; font-size: 26pt; font-weight: 800; color: #4cd98a; padding: 14px; }
-QLabel#statusOk { color: #4cd98a; font-weight: 800; font-size: 14pt; }
-QLabel#statusBad { color: #9aa7b8; font-weight: 800; font-size: 14pt; }
-QLabel#sectionTitle { font-size: 15pt; font-weight: 800; color: #e8f1ff; }
-QLabel#deviceStateOn { color: #4cd98a; font-weight: 800; font-size: 11pt; }
-QLabel#deviceStateOff { color: #9aa7b8; font-weight: 800; font-size: 11pt; }
+QWidget { background-color: #f2f8ff; color: #12315c; font-family: 'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif; font-size: 14pt; }
+QMainWindow { background-color: #f2f8ff; }
+QDialog { background-color: #f2f8ff; color: #12315c; }
+QMessageBox { background-color: #f2f8ff; color: #12315c; }
+QToolTip { background-color: #ffffff; color: #12315c; border: 1px solid #c5d8ee; }
+
+QLabel, QCheckBox, QRadioButton, QSlider { background-color: transparent; }
+
+QGroupBox { background-color: #ffffff; border: 1px solid #cfe0f3; border-radius: 12px; margin-top: 14px; font-weight: 700; font-size: 13pt; padding-top: 10px; color: #0d3b82; }
+QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; color: #0d3b82; background-color: transparent; }
+
+QPushButton { background-color: #ffffff; color: #12315c; border-radius: 12px; border: 1px solid #c5d8ee; padding: 10px; font-weight: 700; font-size: 15pt; }
+QPushButton:hover { background-color: #eaf3fd; border-color: #1a7ee0; }
+QPushButton:pressed { background-color: #d3e6fa; color: #0d3b82; }
+QPushButton:disabled { background-color: #d9dde3; color: #8e98a6; border-color: #c3c9d1; }
+
+QPushButton#jogBtn { background-color: #ffffff; color: #12315c; font-size: 13pt; font-weight: 700; min-height: 56px; max-height: 72px; padding: 4px 6px; border-radius: 10px; border: 1px solid #c5d8ee; }
+QPushButton#jogBtn:hover { background-color: #eaf3fd; border-color: #1a7ee0; }
+QPushButton#jogBtn:pressed { background-color: #1a7ee0; color: #ffffff; }
+QPushButton#homeBtn { background-color: #eef3f9; color: #12315c; border-color: #c5d8ee; font-size: 11pt; min-height: 0px; max-height: 28px; padding: 2px 6px; }
+QPushButton#homeBtn:hover { background-color: #dfe9f5; }
+
+QPushButton#saveBtn, QPushButton#connectBtn, QPushButton#actionBtn, QPushButton#dynStartBtn,
+QPushButton#deviceOnBtn, QPushButton#backBtn, QPushButton#menuBtn {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3a9bf0, stop:1 #1670d4);
+    color: #ffffff; border: 1px solid #1670d4;
+}
+QPushButton#saveBtn:hover, QPushButton#connectBtn:hover, QPushButton#actionBtn:hover, QPushButton#dynStartBtn:hover,
+QPushButton#deviceOnBtn:hover, QPushButton#backBtn:hover, QPushButton#menuBtn:hover {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #55aef6, stop:1 #2285e6);
+    border-color: #1262b4;
+}
+QPushButton#saveBtn:pressed, QPushButton#connectBtn:pressed, QPushButton#actionBtn:pressed, QPushButton#dynStartBtn:pressed,
+QPushButton#deviceOnBtn:pressed, QPushButton#backBtn:pressed, QPushButton#menuBtn:pressed {
+    background-color: #1262b4; color: #ffffff;
+}
+
+QPushButton#disconnectBtn, QPushButton#dynStopBtn, QPushButton#deviceOffBtn {
+    background-color: #e3e7ec; color: #3d4b5e; border: 1px solid #c3c9d1;
+}
+QPushButton#disconnectBtn:hover, QPushButton#dynStopBtn:hover, QPushButton#deviceOffBtn:hover {
+    background-color: #d3d9e0; border-color: #9aa7b8;
+}
+QPushButton#disconnectBtn:pressed, QPushButton#dynStopBtn:pressed, QPushButton#deviceOffBtn:pressed {
+    background-color: #bcc2ca; color: #1f2d40;
+}
+
+QPushButton#saveBtn { font-size: 11pt; min-height: 0px; max-height: 28px; padding: 2px 6px; }
+QPushButton#connectBtn { min-height: 38px; font-size: 11pt; padding: 6px; }
+QPushButton#disconnectBtn { min-height: 38px; font-size: 11pt; padding: 6px; }
+QPushButton#actionBtn { min-height: 65px; font-size: 16pt; }
+QPushButton#dynStartBtn { min-height: 65px; font-size: 16pt; }
+QPushButton#dynStopBtn { min-height: 65px; font-size: 16pt; }
+QPushButton#deviceOnBtn { min-height: 36px; font-size: 11pt; padding: 4px; }
+QPushButton#deviceOffBtn { min-height: 36px; font-size: 11pt; padding: 4px; }
+QPushButton#backBtn { min-height: 44px; font-size: 12pt; }
+QPushButton#menuBtn { min-height: 80px; font-size: 17pt; }
+
+QPushButton#saveBtn:disabled, QPushButton#connectBtn:disabled, QPushButton#actionBtn:disabled, QPushButton#dynStartBtn:disabled,
+QPushButton#deviceOnBtn:disabled, QPushButton#backBtn:disabled, QPushButton#menuBtn:disabled,
+QPushButton#disconnectBtn:disabled, QPushButton#dynStopBtn:disabled, QPushButton#deviceOffBtn:disabled,
+QPushButton#jogBtn:disabled, QPushButton#homeBtn:disabled {
+    background-color: #d9dde3; color: #8e98a6; border: 1px solid #c3c9d1;
+}
+
+QPushButton#deviceApplyBtn { background-color: #e6eef8; color: #12315c; min-height: 32px; font-size: 10pt; padding: 4px; border: 1px solid #c5d8ee; }
+QPushButton#deviceApplyBtn:hover { background-color: #d6e4f4; }
+QPushButton#deviceQuickBtn { background-color: #ffffff; color: #12315c; min-height: 30px; font-size: 10pt; padding: 2px; border: 1px solid #c5d8ee; }
+QPushButton#deviceQuickBtn:hover { background-color: #eaf3fd; border-color: #1a7ee0; }
+
+QLabel#menuTitle1 { font-size: 22pt; font-weight: 900; color: #0d3b82; }
+QLabel#menuTitle2 { font-size: 18pt; font-weight: 800; color: #12315c; }
+QLabel#menuTitle3 { font-size: 14pt; font-weight: 700; color: #4b6a93; }
+QLabel#menuTitle4 { font-size: 15pt; font-weight: 800; color: #1a4d8f; }
+QLabel#posDisplay { background-color: #ffffff; border: 2px solid #1a7ee0; border-radius: 10px; font-size: 26pt; font-weight: 800; color: #0b7a3e; padding: 14px; }
+QLabel#statusOk { color: #0b7a3e; font-weight: 800; font-size: 14pt; }
+QLabel#statusBad { color: #b45309; font-weight: 800; font-size: 14pt; }
+QLabel#sectionTitle { font-size: 15pt; font-weight: 800; color: #0d3b82; }
+QLabel#deviceStateOn { color: #0b7a3e; font-weight: 800; font-size: 11pt; }
+QLabel#deviceStateOff { color: #b45309; font-weight: 800; font-size: 11pt; }
+
 QGroupBox#compactBox { margin-top: 10px; padding-top: 8px; font-size: 11pt; }
 QGroupBox#compactBox QSpinBox, QGroupBox#compactBox QDoubleSpinBox { padding: 4px 6px; font-size: 11pt; min-height: 26px; }
-QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit { background-color: #0f2540; border: 2px solid #2a4a75; border-radius: 8px; padding: 8px; font-size: 13pt; color: #e8f1ff; }
-QComboBox QAbstractItemView { background-color: #0f2540; color: #e8f1ff; border: 1px solid #2a4a75; selection-background-color: #0078d4; selection-color: #ffffff; outline: none; }
-QListView { background-color: #0f2540; color: #e8f1ff; }
+
+QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit { background-color: #ffffff; border: 1px solid #c5d8ee; border-radius: 8px; padding: 8px; font-size: 13pt; color: #12315c; selection-background-color: #1a7ee0; selection-color: #ffffff; }
+QComboBox:hover, QDoubleSpinBox:hover, QSpinBox:hover, QLineEdit:hover { border-color: #8fbbea; }
+QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus, QLineEdit:focus { border: 2px solid #1a7ee0; }
+QComboBox QAbstractItemView { background-color: #ffffff; color: #12315c; border: 1px solid #c5d8ee; selection-background-color: #1a7ee0; selection-color: #ffffff; outline: none; }
+QListView { background-color: #ffffff; color: #12315c; }
+
 QCheckBox, QRadioButton { spacing: 8px; }
-QCheckBox::indicator, QRadioButton::indicator { width: 18px; height: 18px; border: 2px solid #4a6a95; background-color: #0f2540; }
+QCheckBox::indicator, QRadioButton::indicator { width: 18px; height: 18px; border: 2px solid #8fbbea; background-color: #ffffff; }
 QRadioButton::indicator { border-radius: 9px; }
-QCheckBox::indicator:checked, QRadioButton::indicator:checked { background-color: #0078d4; border-color: #4da6ff; }
-QTextEdit { background-color: #0f2540; border: 2px solid #2a4a75; border-radius: 8px; color: #e8f1ff; font-family: Consolas, monospace; font-size: 11pt; }
-QTableWidget { background-color: #0f2540; border: 2px solid #2a4a75; border-radius: 8px; gridline-color: #1f3a5f; color: #e8f1ff; font-size: 11pt; }
-QHeaderView::section { background-color: #163358; color: #e8f1ff; padding: 6px; border: none; font-weight: 700; }
-QScrollBar:vertical { background: #0f2540; width: 12px; margin: 0; }
-QScrollBar::handle:vertical { background: #2a4a75; border-radius: 6px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #0078d4; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked { background-color: #1a7ee0; border-color: #1670d4; }
+
+QSlider::groove:horizontal { height: 6px; background: #d3e2f3; border-radius: 3px; }
+QSlider::sub-page:horizontal { background: #1a7ee0; border-radius: 3px; }
+QSlider::handle:horizontal { background: #ffffff; border: 2px solid #1a7ee0; width: 16px; margin: -6px 0; border-radius: 9px; }
+
+QTextEdit { background-color: #ffffff; border: 1px solid #cfe0f3; border-radius: 8px; color: #12315c; font-family: Consolas, monospace; font-size: 11pt; }
+QTableWidget { background-color: #ffffff; border: 1px solid #cfe0f3; border-radius: 8px; gridline-color: #e1ecf8; color: #12315c; font-size: 11pt; alternate-background-color: #f5f9fe; selection-background-color: #cfe5fb; selection-color: #0d3b82; }
+QHeaderView::section { background-color: #e6f0fb; color: #0d3b82; padding: 6px; border: none; font-weight: 700; }
+
+QScrollBar:vertical { background: #eef4fb; width: 12px; margin: 0; }
+QScrollBar::handle:vertical { background: #b9d2ee; border-radius: 6px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #1a7ee0; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { background: #0f2540; height: 12px; margin: 0; }
-QScrollBar::handle:horizontal { background: #2a4a75; border-radius: 6px; min-width: 24px; }
-QScrollBar::handle:horizontal:hover { background: #0078d4; }
+QScrollBar:horizontal { background: #eef4fb; height: 12px; margin: 0; }
+QScrollBar::handle:horizontal { background: #b9d2ee; border-radius: 6px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #1a7ee0; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
 

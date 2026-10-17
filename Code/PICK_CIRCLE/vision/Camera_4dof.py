@@ -38,6 +38,19 @@ DET_SCALE = 0.5
 CAMERA_BRIGHTNESS_DEFAULT = 30
 CAMERA_BRIGHTNESS_STEP = 15
 
+# Tăng nhẹ độ sáng CHỈ ảnh hiển thị (display). Ảnh đưa vào nhận diện vẫn là ảnh
+# gốc (undistorted) nên ngưỡng màu đỏ và hiệu chỉnh mm/px không bị ảnh hưởng;
+# độ sáng phần cứng camera (CAP_PROP_BRIGHTNESS) ở trên cũng giữ nguyên.
+#   DISPLAY_GAMMA = 1.0 -> giữ nguyên (tắt)
+#   DISPLAY_GAMMA > 1.0 -> sáng hơn (vd 1.4 sáng nhiều hơn, 1.15 sáng ít hơn)
+DISPLAY_GAMMA = 1.25
+_DISPLAY_LUT = np.round(255.0 * np.power(np.arange(256) / 255.0, 1.0 / DISPLAY_GAMMA)).astype(np.uint8)
+
+
+def brighten_for_display(img):
+    """Trả về BẢN SAO (uint8, BGR) đã tăng sáng nhẹ, chỉ dùng để vẽ/hiển thị."""
+    return cv2.LUT(img, _DISPLAY_LUT)
+
 
 def _wrap_angle_180(angle_deg):
     a = angle_deg % 180.0
@@ -398,7 +411,8 @@ def required_dof4_rotation(object_angle_deg, target_angle_deg=90.0):
     return _wrap_angle_180(target_angle_deg - object_angle_deg)
 
 
-def run_live_display(camera_index, camera_matrix, dist_coeffs, brightness=CAMERA_BRIGHTNESS_DEFAULT):
+def run_live_display(camera_index, camera_matrix, dist_coeffs,
+                     brightness=CAMERA_BRIGHTNESS_DEFAULT, show_extra=True):
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         print(f"Khong the mo camera index {camera_index}")
@@ -431,9 +445,9 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs, brightness=CAMERA
         upscale = 1.0 / DET_SCALE
 
         # --- Xác định ROI (ô vuông cố định) ---
-        h, w = undistorted.shape[:2]
-        roi_size = int(min(w, h) * 2 / 3)  # kích thước ô vuông, tăng thêm so với 5/9 trước đó
-        roi = (w//2 - roi_size//2, h//2 - roi_size//2, roi_size, roi_size)
+        img_h, img_w = undistorted.shape[:2]
+        roi_size = int(min(img_w, img_h) * 2 / 3)  # kích thước ô vuông, tăng thêm so với 5/9 trước đó
+        roi = (img_w//2 - roi_size//2, img_h//2 - roi_size//2, roi_size, roi_size)
         # ------------------------------------
 
         frame_result = detect_frame_holes(undistorted, cx, cy, fx, fy, mask=red_mask, upscale=upscale)
@@ -446,7 +460,8 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs, brightness=CAMERA
             roi=roi
         )
 
-        display = undistorted.copy()
+        # Chỉ làm sáng ảnh HIỂN THỊ; nhận diện ở trên vẫn dùng ảnh gốc (undistorted)
+        display = brighten_for_display(undistorted)
         origin_px = (int(round(cx)), int(round(cy)))
         cv2.drawMarker(display, origin_px, (0, 255, 255), cv2.MARKER_CROSS, 20, 2)
 
@@ -466,11 +481,11 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs, brightness=CAMERA
         if not frame_result['frame_found']:
             cv2.putText(display, "Khong thay khung", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         else:
-            for h in frame_result['holes']:
-                center_px = (int(round(h['cx_px'])), int(round(h['cy_px'])))
+            for hole in frame_result['holes']:
+                center_px = (int(round(hole['cx_px'])), int(round(hole['cy_px'])))
                 cv2.circle(display, center_px, 4, (0, 255, 255), -1)
-                cv2.putText(display, f"#{h['slot_id']}", (center_px[0] - 10, center_px[1] + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
-                txt = f"({h['x_mm']:.1f},{h['y_mm']:.1f}) {h['angle_deg']:.0f}deg"
+                cv2.putText(display, f"#{hole['slot_id']}", (center_px[0] - 10, center_px[1] + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+                txt = f"({hole['x_mm']:.1f},{hole['y_mm']:.1f}) {hole['angle_deg']:.0f}deg"
                 cv2.putText(display, txt, (center_px[0] - 70, center_px[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
             cv2.putText(
                 display,
@@ -488,6 +503,17 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs, brightness=CAMERA
         cv2.putText(display, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(display, f"Do sang: {current_brightness:.0f} (+/- de chinh)", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
         cv2.imshow("Camera_4dof - Red Rectangle 10x20mm", display)
+
+        # --- Cửa sổ phụ: ảnh RGB và ảnh nhị phân (chỉ hiện khi chạy trực tiếp file này) ---
+        if show_extra:
+            # Ảnh RGB (màu gốc đã undistort, không vẽ chú thích, không tăng sáng)
+            cv2.imshow("RGB", undistorted)
+
+            # Ảnh nhị phân NÉT: tính lại mask ở độ phân giải gốc (chỉ để hiển thị).
+            # Mask dùng cho nhận diện vẫn là red_mask (độ phân giải DET_SCALE) nên
+            # không ảnh hưởng tốc độ/kết quả đo, chỉ tốn thêm một chút CPU khi hiển thị.
+            binary_full = _build_red_mask(undistorted)
+            cv2.imshow("Binary (red mask)", binary_full)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -509,6 +535,8 @@ def main():
     parser.add_argument('--camera', type=int, default=0)
     parser.add_argument('--brightness', type=float, default=CAMERA_BRIGHTNESS_DEFAULT,
                          help="Do sang camera khoi tao (cv2.CAP_PROP_BRIGHTNESS); chinh them bang phim +/- khi dang chay.")
+    parser.add_argument('--no-extra', action='store_true',
+                        help="Khong hien thi cua so anh RGB va anh nhi phan.")
     args = parser.parse_args()
     if not os.path.isfile(args.calib):
         print(f"LOI: Khong tim thay file calib '{args.calib}'.")
@@ -516,7 +544,8 @@ def main():
     data = np.load(args.calib)
     camera_matrix = data['camera_matrix']
     dist_coeffs = data['dist_coeffs']
-    run_live_display(args.camera, camera_matrix, dist_coeffs, brightness=args.brightness)
+    run_live_display(args.camera, camera_matrix, dist_coeffs,
+                     brightness=args.brightness, show_extra=not args.no_extra)
 
 
 if __name__ == '__main__':

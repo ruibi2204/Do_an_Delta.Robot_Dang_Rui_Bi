@@ -6,6 +6,22 @@ import cv2
 import numpy as np
 
 
+# =====================================================================
+# ĐỘ SÁNG ẢNH HIỂN THỊ
+# Chỉ làm sáng ảnh dùng để VẼ/HIỂN THỊ (display). Ảnh đưa vào nhận diện vẫn là
+# ảnh gốc (undistorted) nên kết quả nhận diện, kích thước và tọa độ không đổi.
+#   DISPLAY_GAMMA = 1.0 -> giữ nguyên (tắt); > 1.0 -> sáng hơn.
+# Muốn sáng thêm thì tăng số này (vd 1.4), muốn bớt thì giảm (vd 1.15).
+# =====================================================================
+DISPLAY_GAMMA = 1.25
+_DISPLAY_LUT = np.round(255.0 * np.power(np.arange(256) / 255.0, 1.0 / DISPLAY_GAMMA)).astype(np.uint8)
+
+
+def brighten_for_display(img):
+    """Trả về BẢN SAO (uint8, BGR) đã tăng sáng nhẹ, chỉ dùng để vẽ/hiển thị."""
+    return cv2.LUT(img, _DISPLAY_LUT)
+
+
 class CircleTracker:
     """Lớp quản lý và làm mượt vị trí các vòng tròn qua các frame để chống chớp giật."""
 
@@ -191,7 +207,9 @@ def _remove_small_components(mask, min_area=200):
 # =====================================================================
 # THUẬT TOÁN NHẬN DIỆN RGB (GIỮ NGUYÊN TÊN HÀM CŨ THEO YÊU CẦU)
 # =====================================================================
-def detect_circles_hsv_optimized(frame):
+def detect_circles_hsv_optimized(frame, return_masks=False):
+    """Mặc định trả về danh sách vòng tròn như cũ. Nếu return_masks=True thì trả về
+    (detected, red_mask, blue_mask) - đúng các mask nhị phân đang dùng để nhận diện."""
     max_allowed_radius = 110
 
     blurred = cv2.GaussianBlur(frame, (5, 5), 1.5)
@@ -211,10 +229,13 @@ def detect_circles_hsv_optimized(frame):
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel_close)
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel_open)
 
+    # Lọc nhiễu nhỏ 1 lần ở đây để cùng một mask vừa dùng nhận diện vừa hiển thị
+    red_mask = _remove_small_components(red_mask, min_area=200)
+    blue_mask = _remove_small_components(blue_mask, min_area=200)
+
     detected_this_frame = []
 
     def process_contours(mask, color_name, max_count=4):
-        mask = _remove_small_components(mask, min_area=200)
         contours, hierarchy = cv2.findContours(
             mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
         )
@@ -261,13 +282,35 @@ def detect_circles_hsv_optimized(frame):
     process_contours(red_mask, 'red', max_count=4)
     process_contours(blue_mask, 'blue', max_count=4)
 
+    if return_masks:
+        return detected_this_frame, red_mask, blue_mask
     return detected_this_frame
 
 
 # =====================================================================
 # VÒNG LẶP LIVE DISPLAY CẢI TIẾN TOÁN HỌC KHÔNG GIAN
 # =====================================================================
-def run_live_display(camera_index, camera_matrix, dist_coeffs):
+def _make_binary_view(mask, label, label_color):
+    """Ảnh nhị phân (0/255) -> ảnh BGR VUÔNG có nhãn để hiển thị.
+    KHÔNG resize/kéo giãn (nên hình tròn vẫn tròn): nếu mask hình chữ nhật thì
+    đặt vào giữa khung vuông và thêm viền xám (viền chỉ để bù cho đủ vuông)."""
+    h, w = mask.shape[:2]
+    side = max(h, w)
+    view = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    if h != w:
+        canvas = np.full((side, side, 3), 60, np.uint8)
+        y0 = (side - h) // 2
+        x0 = (side - w) // 2
+        canvas[y0:y0 + h, x0:x0 + w] = view
+        view = canvas
+    cv2.putText(view, label, (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, label_color, 2)
+    return view
+
+
+def run_live_display(camera_index, camera_matrix, dist_coeffs, show_debug_windows=False):
+    """show_debug_windows=True: mở thêm cửa sổ ảnh màu gốc và ảnh nhị phân
+    (chỉ bật khi chạy trực tiếp file này, xem main())."""
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not cap.isOpened():
         print(f"Không thể mở camera index {camera_index}")
@@ -293,10 +336,16 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs):
             frame, camera_matrix, dist_coeffs
         )
 
-        detected = detect_circles_hsv_optimized(undistorted)
+        if show_debug_windows:
+            detected, red_mask, blue_mask = detect_circles_hsv_optimized(
+                undistorted, return_masks=True
+            )
+        else:
+            detected = detect_circles_hsv_optimized(undistorted)
         stable_circles = tracker.update(detected)
 
-        display = undistorted.copy()
+        # Chỉ làm sáng ảnh HIỂN THỊ; nhận diện ở trên vẫn dùng ảnh gốc (undistorted)
+        display = brighten_for_display(undistorted)
 
         # 1. Trích xuất Tiêu cự (Focal Lengths) và Tâm (Optical Center)
         fx = new_camera_matrix[0, 0]
@@ -379,6 +428,10 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         cv2.imshow('Live Camera - Tracking', display)
+        if show_debug_windows:
+            cv2.imshow('RGB - Anh mau goc', undistorted)
+            cv2.imshow('Nhi phan - DO', _make_binary_view(red_mask, 'Nhi phan: DO', (0, 0, 255)))
+            cv2.imshow('Nhi phan - XANH', _make_binary_view(blue_mask, 'Nhi phan: XANH', (255, 0, 0)))
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
@@ -401,7 +454,7 @@ def main():
     camera_matrix = data['camera_matrix']
     dist_coeffs = data['dist_coeffs']
 
-    run_live_display(args.camera, camera_matrix, dist_coeffs)
+    run_live_display(args.camera, camera_matrix, dist_coeffs, show_debug_windows=True)
 
 
 if __name__ == '__main__':

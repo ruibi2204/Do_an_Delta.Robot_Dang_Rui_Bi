@@ -85,7 +85,7 @@ class CameraWindow(BaseTabWindow):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(VIDEO_MIN_W, VIDEO_MIN_H)
         self.video_label.setStyleSheet(
-            "background-color:#0f2540; border:2px solid #2a4a75; border-radius:10px; color:#9fb6d6;"
+            "background-color:#0f2540; border:2px solid #1a7ee0; border-radius:10px; color:#b9d2ee;"
         )
         # Ignored: kích thước label chỉ do layout quyết định, KHÔNG bị pixmap
         # đẩy to lên -> các nút bên dưới luôn còn chỗ hiển thị.
@@ -102,7 +102,7 @@ class CameraWindow(BaseTabWindow):
         self.btn_cam_stop.clicked.connect(self.on_stop_camera)
         self.btn_cam_stop.setEnabled(False)
         self.lbl_fps = QLabel("FPS: --")
-        self.lbl_fps.setStyleSheet("color:#cfe3ff; font-weight:700; font-size:10pt;")
+        self.lbl_fps.setStyleSheet("color:#12315c; font-weight:700; font-size:10pt;")
         cam_ctrl_row.addWidget(self.btn_cam_start)
         cam_ctrl_row.addWidget(self.btn_cam_stop)
         cam_ctrl_row.addWidget(self.lbl_fps)
@@ -112,7 +112,7 @@ class CameraWindow(BaseTabWindow):
             "Chế độ nhận diện: Camera_4dof.py - HCN đỏ 10x20mm, có góc quay."
         )
         self.lbl_mode_note.setWordWrap(True)
-        self.lbl_mode_note.setStyleSheet("color:#9fb6d6; font-size:9pt;")
+        self.lbl_mode_note.setStyleSheet("color:#4b6a93; font-size:9pt;")
         video_col.addWidget(self.lbl_mode_note)
 
         # ---------------- Cột phải: THỦ CÔNG + OFFSET + log camera ----------------
@@ -167,7 +167,7 @@ class CameraWindow(BaseTabWindow):
             "gốc tọa độ thực tế của robot."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color:#9fb6d6; font-size:9pt;")
+        note.setStyleSheet("color:#4b6a93; font-size:9pt;")
         ctrl_col.addWidget(note)
 
         # ---------------- [MỚI] Tọa độ vòng tròn đỏ Ø30mm ----------------
@@ -177,7 +177,7 @@ class CameraWindow(BaseTabWindow):
         circle_layout.setContentsMargins(10, 4, 10, 6)
         self.lbl_circle_coord = QLabel("Chưa phát hiện")
         self.lbl_circle_coord.setStyleSheet(
-            "color:#9aa7b8; font-weight:800; font-size:13pt;"
+            "color:#6b7f99; font-weight:800; font-size:13pt;"
         )
         self.lbl_circle_coord.setWordWrap(True)
         circle_layout.addWidget(self.lbl_circle_coord)
@@ -322,12 +322,12 @@ class CameraWindow(BaseTabWindow):
             x_mm, y_mm = coords
             self.lbl_circle_coord.setText(f"X = {x_mm:.1f} mm\nY = {y_mm:.1f} mm")
             self.lbl_circle_coord.setStyleSheet(
-                "color:#4cd98a; font-weight:800; font-size:13pt;"
+                "color:#0b7a3e; font-weight:800; font-size:13pt;"
             )
         else:
             self.lbl_circle_coord.setText("Chưa phát hiện")
             self.lbl_circle_coord.setStyleSheet(
-                "color:#9aa7b8; font-weight:800; font-size:13pt;"
+                "color:#6b7f99; font-weight:800; font-size:13pt;"
             )
 
         pix = cv2_to_qpixmap(frame)

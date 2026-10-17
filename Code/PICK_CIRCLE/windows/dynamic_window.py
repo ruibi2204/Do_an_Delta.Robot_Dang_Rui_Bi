@@ -218,13 +218,13 @@ class DynamicWindow(BaseTabWindow):
         self.video_label_dyn.setAlignment(Qt.AlignCenter)
         self.video_label_dyn.setMinimumSize(720, 480)
         self.video_label_dyn.setStyleSheet(
-            "background-color:#0f2540; border:2px solid #2a4a75; border-radius:10px; color:#9fb6d6;"
+            "background-color:#0f2540; border:2px solid #1a7ee0; border-radius:10px; color:#b9d2ee;"
         )
         self.video_label_dyn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         video_col.addWidget(self.video_label_dyn, 5)
 
         self.lbl_fps_dyn = QLabel("FPS: --")
-        self.lbl_fps_dyn.setStyleSheet("color:#333333; font-weight:700;")
+        self.lbl_fps_dyn.setStyleSheet("color:#12315c; font-weight:700;")
         video_col.addWidget(self.lbl_fps_dyn)
 
         self.dyn_table = QTableWidget(0, len(DYN_COLUMNS))
@@ -271,7 +271,7 @@ class DynamicWindow(BaseTabWindow):
             "8 lỗ (viền đỏ, rỗng)"
         )
         info_lbl.setWordWrap(True)
-        info_lbl.setStyleSheet("color:#333333; font-size:9pt;")
+        info_lbl.setStyleSheet("color:#4b6a93; font-size:9pt;")
         info_layout.addWidget(info_lbl)
 
         zrow = QHBoxLayout()
