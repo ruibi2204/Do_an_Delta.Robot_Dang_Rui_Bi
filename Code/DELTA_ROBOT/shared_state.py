@@ -98,6 +98,12 @@ DET_SCALE = 0.5
 # brightness_step_down != 0.
 CAMERA_BRIGHTNESS_STEP = 10.0
 
+# Độ sáng camera CỐ ĐỊNH: giá trị TUYỆT ĐỐI trên thang CAP_PROP_BRIGHTNESS
+# (thường ~0-255, mặc định camera hay là ~128). Dùng cho CameraThread nào truyền
+# brightness_value=...; khác brightness_step_down ở chỗ không phụ thuộc giá trị
+# camera đang giữ từ lần chạy trước. Muốn sáng thêm thì tăng số này.
+CAMERA_BRIGHTNESS_FIXED = 150
+
 CSV_COLUMNS = ["Loại", "KT/Đường kính", "X (mm)", "Y (mm)", "Góc (°)"]
 CSV_FIELDNAMES = ["type", "diameter_mm", "width_mm", "height_mm", "angle_deg", "x_mm", "y_mm"]
 DYN_COLUMNS = ["Loại", "Slot", "X (mm)", "Y (mm)", "Góc (°)"]
@@ -258,19 +264,23 @@ class CameraThread(QThread):
     stopped = Signal()
 
     def __init__(self, camera_index=0, calib_path=None, detect_mode=COORD_MODE_CIRCLE,
-                 brightness_step_down=0):
+                 brightness_step_down=0, brightness_value=None):
         """
         brightness_step_down: số "bậc" muốn GIẢM độ sáng camera so với mặc
             định của driver (mỗi bậc = CAMERA_BRIGHTNESS_STEP đơn vị trên
             thang CAP_PROP_BRIGHTNESS). Truyền số âm để TĂNG sáng. Mặc định
             0 = giữ nguyên độ sáng gốc của camera (không đổi hành vi cũ ở
             những nơi khác đang dùng CameraThread).
+        brightness_value: độ sáng camera TUYỆT ĐỐI (thang CAP_PROP_BRIGHTNESS),
+            đặt thẳng giá trị này mỗi lần mở camera. Nếu khác None thì được ưu
+            tiên hơn brightness_step_down. Mặc định None = không dùng.
         """
         super().__init__()
         self.camera_index = camera_index
         self.calib_path = calib_path
         self.detect_mode = detect_mode
         self.brightness_step_down = brightness_step_down
+        self.brightness_value = brightness_value
         self._running = False
         self.camera_matrix = None
         self.dist_coeffs = None
@@ -290,6 +300,18 @@ class CameraThread(QThread):
         self._running = False
 
     def _apply_brightness_adjustment(self, cap):
+        if self.brightness_value is not None:
+            try:
+                current = cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                cap.set(cv2.CAP_PROP_BRIGHTNESS, float(self.brightness_value))
+                applied = cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                print(
+                    f"[CAMERA] Brightness cố định: {current:.0f} -> {applied:.0f} "
+                    f"(đặt {self.brightness_value})"
+                )
+            except Exception as e:
+                print(f"[CAMERA] Không thể chỉnh brightness: {e}")
+            return
         if not self.brightness_step_down:
             return
         try:

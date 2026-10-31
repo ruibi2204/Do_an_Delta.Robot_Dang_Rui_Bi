@@ -13,13 +13,23 @@ import numpy as np
 #   DISPLAY_GAMMA = 1.0 -> giữ nguyên (tắt); > 1.0 -> sáng hơn.
 # Muốn sáng thêm thì tăng số này (vd 1.4), muốn bớt thì giảm (vd 1.15).
 # =====================================================================
-DISPLAY_GAMMA = 1.25
+DISPLAY_GAMMA = 1
 _DISPLAY_LUT = np.round(255.0 * np.power(np.arange(256) / 255.0, 1.0 / DISPLAY_GAMMA)).astype(np.uint8)
 
 
 def brighten_for_display(img):
     """Trả về BẢN SAO (uint8, BGR) đã tăng sáng nhẹ, chỉ dùng để vẽ/hiển thị."""
     return cv2.LUT(img, _DISPLAY_LUT)
+
+
+# =====================================================================
+# ĐỘ SÁNG CAMERA (phần cứng, chỉnh qua driver)
+# Khác DISPLAY_GAMMA: giá trị này đổi luôn ảnh đưa vào nhận diện, nên sau khi
+# chỉnh phải kiểm tra lại đường kính hiển thị (xem _CIRCLE_CALIB) và nhận diện màu.
+#   Webcam Logitech (CAP_DSHOW) thường có thang 0-255, mặc định khoảng 128.
+#   CAMERA_BRIGHTNESS = None -> không chỉnh (giữ độ sáng mặc định của camera).
+# =====================================================================
+CAMERA_BRIGHTNESS = 160
 
 
 class CircleTracker:
@@ -319,6 +329,9 @@ def run_live_display(camera_index, camera_matrix, dist_coeffs, show_debug_window
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)
+    if CAMERA_BRIGHTNESS is not None:
+        cap.set(cv2.CAP_PROP_BRIGHTNESS, CAMERA_BRIGHTNESS)
+        print(f"Brightness camera: {cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
 
     tracker = CircleTracker(alpha=0.35, max_disappeared=15, dist_threshold=30)
     print("Đang chạy chế độ Live Camera. Nhấn 'q' để thoát.")

@@ -54,7 +54,7 @@ ROI_FRAME_SHIFT_DOWN_MM = 50.0
 # khi detect + lọc vật nằm trong vùng khung, nên mọi thứ tính từ đây trở
 # đi (nhãn hiển thị, dự đoán vị trí gắp predict_grasp_pose, tọa độ gửi
 # cho robot qua x_mm_grasp/y_mm_grasp) đều phản ánh đúng offset này.
-OBJECT_Y_OFFSET_MM = 3.0
+OBJECT_Y_OFFSET_MM = 2.0
 
 
 

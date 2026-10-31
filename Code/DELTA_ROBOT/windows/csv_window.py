@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from shared_state import (
     BaseTabWindow, FnWorker, StreamToSignal, save_config,
     COORD_MODE_CIRCLE, CameraThread, cv2_to_qpixmap, home_and_wait, BASE_DIR,
+    CAMERA_BRIGHTNESS_FIXED,
 )
 
 # Các khóa tham số tốc độ mà thanh trượt SPEED sẽ scale (thời gian di
@@ -316,7 +317,7 @@ class CsvWindow(BaseTabWindow):
             camera_index=self.ctx.cfg.get("camera_index", 0),
             calib_path=calib_path,
             detect_mode=COORD_MODE_CIRCLE,
-            brightness_step_down=2,
+            brightness_value=CAMERA_BRIGHTNESS_FIXED,
         )
         self.camera_thread.frame_ready.connect(self._on_camera_frame)
         self.camera_thread.error.connect(self._on_camera_error)
